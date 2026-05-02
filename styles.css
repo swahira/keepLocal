@@ -1,0 +1,185 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: Inter, system-ui, -apple-system, sans-serif;
+}
+
+body {
+    height: 100vh;
+    background: #f8fafc;
+    color: #334155;
+}
+
+/* Layout */
+.app {
+    display: flex;
+    height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 260px;
+    background: #f8fafc;
+    border-right: 1px solid #e2e8f0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Toolbar */
+.toolbar {
+    padding: 10px;
+    display: flex;
+    gap: 8px;
+}
+
+.btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+    background: white;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.btn:hover {
+    background: #f1f5f9;
+}
+
+.btn.primary {
+    background: #3b82f6;
+    color: white;
+    border: none;
+}
+
+.btn.primary:hover {
+    background: #2563eb;
+}
+
+/* Search */
+.search {
+    padding: 8px 10px;
+}
+
+.search input {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 13px;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+    outline: none;
+}
+
+.search input:focus {
+    border-color: #3b82f6;
+}
+
+/* File tree */
+.file-tree {
+    flex: 1;
+    overflow-y: auto;
+    padding-top: 4px;
+}
+
+.file {
+    font-size: 13px;
+    padding: 6px 10px;
+    cursor: pointer;
+    border-radius: 4px;
+    margin: 1px 6px;
+    transition: 0.15s;
+}
+
+.file:hover {
+    background: #e2e8f0;
+}
+
+.file.active {
+    background: #dbeafe;
+    color: #1d4ed8;
+    font-weight: 500;
+}
+
+/* Main */
+.main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: white;
+}
+
+/* Top bar */
+.topbar {
+    height: 42px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    font-size: 13px;
+    background: #f8fafc;
+}
+
+.controls button {
+    border: none;
+    background: transparent;
+    padding: 4px 6px;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.controls button:hover {
+    background: #e2e8f0;
+}
+
+/* Editor */
+.editor-container {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+/* Line numbers */
+.line-numbers {
+    width: 40px;
+    background: #f8fafc;
+    border-right: 1px solid #e2e8f0;
+    font-size: 12px;
+    color: #94a3b8;
+    text-align: right;
+    padding: 8px 6px 0 0;
+    font-family: monospace;
+}
+
+.line-numbers div {
+    height: 20px;
+}
+
+/* Textarea */
+textarea {
+    flex: 1;
+    border: none;
+    outline: none;
+    padding: 8px 10px;
+    font-family: monospace;
+    font-size: 14px;
+    line-height: 20px;
+    color: #1e293b;
+    resize: none;
+}
+
+/* Status bar */
+.statusbar {
+    height: 26px;
+    border-top: 1px solid #e2e8f0;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    background: #f8fafc;
+    color: #64748b;
+}

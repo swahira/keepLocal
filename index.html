@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Editor UI</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+
+    <div class="app">
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="toolbar">
+                <button class="btn primary" onclick="addFile()">+ New File</button>
+                <button class="btn" onclick="addFolder()">📁 New Folder</button>
+            </div>
+
+            <div class="search">
+                <input id="search" placeholder="Search files..." />
+            </div>
+
+            <div id="fileTree" class="file-tree"></div>
+        </div>
+
+        <!-- Main -->
+        <div class="main">
+
+            <!-- Top bar -->
+            <div class="topbar">
+                <div id="breadcrumb"></div>
+
+                <div class="controls">
+                    <button onclick="changeFont(-1)">A-</button>
+                    <button onclick="changeFont(1)">A+</button>
+                    <button onclick="toggleTheme()">🌙</button>
+                </div>
+            </div>
+
+            <!-- Editor -->
+            <div class="editor-container">
+                <div id="lineNumbers" class="line-numbers"></div>
+                <textarea id="editor"></textarea>
+            </div>
+
+            <!-- Status -->
+            <div class="statusbar">
+                <span id="cursorPos">Ln 1, Col 1</span>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
