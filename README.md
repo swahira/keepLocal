@@ -8,8 +8,6 @@
 
 localKeep is a minimalist yet powerful notes application designed for those who value privacy and speed. It lives entirely in your browser, storing your data locally without any cloud synchronization or tracking.
 
----
-
 ## Features
 
 - **Premium UI/UX**: VS Code-inspired design with a focus on productivity and aesthetics.
@@ -25,6 +23,7 @@ localKeep is a minimalist yet powerful notes application designed for those who 
 ## Privacy First
 
 localKeep is built on the principle of absolute privacy:
+
 - **No Account Required**: Start writing instantly.
 - **No Cloud**: Your notes never leave your machine.
 - **No Tracking**: No analytics, no cookies, just your notes.
@@ -64,7 +63,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 Distributed under the MIT License. See `LICENSE` for more information.
 
----
-
 Built with care for privacy and productivity.
-
