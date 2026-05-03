@@ -1,4 +1,4 @@
-# 📝 localKeep
+# localKeep
 
 **A premium, private, and local-first notes editor for the modern web.**
 
@@ -10,26 +10,26 @@ localKeep is a minimalist yet powerful notes application designed for those who 
 
 ---
 
-## ✨ Features
+## Features
 
-- **🚀 Premium UI/UX**: VS Code-inspired design with a focus on productivity and aesthetics.
-- **📁 File Management**: Create, rename, delete, and organize notes into nested folders.
-- **🖱️ Drag & Drop**: Intuitively reorganize your file tree with smooth drag-and-drop interactions.
-- **🌗 Custom Themes**: Seamlessly switch between a vibrant Light mode and a sleek Dark mode.
-- **🔍 Powerful Search**: Instantly find notes with recursive searching across all folders.
-- **📦 Export & Import**: Backup your entire workspace or specific folders as ZIP files.
-- **⌨️ Keyboard Optimized**: Custom modals and keyboard shortcuts for a streamlined workflow.
-- **💾 Auto-Save**: Never lose a thought; every keystroke is persisted in real-time.
-- **📏 Technical Polish**: Line numbering, cursor position tracking, and breadcrumb navigation.
+- **Premium UI/UX**: VS Code-inspired design with a focus on productivity and aesthetics.
+- **File Management**: Create, rename, delete, and organize notes into nested folders.
+- **Drag & Drop**: Intuitively reorganize your file tree with smooth drag-and-drop interactions.
+- **Custom Themes**: Seamlessly switch between a vibrant Light mode and a sleek Dark mode.
+- **Powerful Search**: Instantly find notes with recursive searching across all folders.
+- **Export & Import**: Backup your entire workspace or specific folders as ZIP files.
+- **Keyboard Optimized**: Custom modals and keyboard shortcuts for a streamlined workflow.
+- **Auto-Save**: Never lose a thought; every keystroke is persisted in real-time.
+- **Technical Polish**: Line numbering, cursor position tracking, and breadcrumb navigation.
 
-## 🛡️ Privacy First
+## Privacy First
 
 localKeep is built on the principle of absolute privacy:
 - **No Account Required**: Start writing instantly.
 - **No Cloud**: Your notes never leave your machine.
 - **No Tracking**: No analytics, no cookies, just your notes.
 
-## 🛠️ Installation
+## Installation
 
 Since localKeep is a pure client-side application, you can run it anywhere:
 
@@ -42,7 +42,7 @@ Since localKeep is a pure client-side application, you can run it anywhere:
 
 Alternatively, you can host it on **GitHub Pages**, **Vercel**, or any static hosting provider.
 
-## 🧰 Built With
+## Built With
 
 - **HTML5 Semantic Structure**
 - **Vanilla CSS3** (Custom properties, Flexbox, Grid)
@@ -50,7 +50,7 @@ Alternatively, you can host it on **GitHub Pages**, **Vercel**, or any static ho
 - **[Lucide Icons](https://lucide.dev/)** for consistent iconography
 - **[JSZip](https://stuk.github.io/jszip/)** for client-side ZIP generation
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
@@ -60,10 +60,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-## 📄 License
+## License
 
 Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 
-Built with ❤️ for privacy and productivity.
+Built with care for privacy and productivity.
+
