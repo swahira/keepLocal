@@ -3,29 +3,53 @@
 
 <head>
     <meta charset="UTF-8" />
-    <title>Editor UI</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>localKeep - Your Local Editor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 
-<body>
+<body data-theme="light">
 
     <div class="app">
 
         <!-- Sidebar -->
         <div class="sidebar">
             <div class="toolbar">
-                <button class="btn primary" onclick="addFile()">+ New File</button>
-                <button class="btn" onclick="addFolder()">📁 New Folder</button>
+                <button class="btn primary" onclick="addFile()" title="New File">
+                    <i data-lucide="file-plus" size="18"></i>
+                    <span>File</span>
+                </button>
+                <button class="btn" onclick="addFolder()" title="New Folder">
+                    <i data-lucide="folder-plus" size="18"></i>
+                    <span>Folder</span>
+                </button>
+            </div>
+
+            <div class="toolbar secondary-toolbar">
+                <button class="btn-small" onclick="exportAll()" title="Export All as ZIP">
+                    <i data-lucide="download" size="14"></i> Export
+                </button>
+                <button class="btn-small" onclick="document.getElementById('importInput').click()" title="Import ZIP">
+                    <i data-lucide="upload" size="14"></i> Import
+                </button>
+                <input type="file" id="importInput" accept=".zip" style="display: none;" onchange="handleImport(event)">
             </div>
 
             <div class="search">
-                <input id="search" placeholder="Search files..." />
+                <div class="search-container">
+                    <input id="searchInput" placeholder="Search notes..." oninput="handleSearch()" />
+                </div>
             </div>
 
             <div id="fileTree" class="file-tree"></div>
         </div>
 
-        <!-- Main -->
+        <!-- Main Content -->
         <div class="main">
 
             <!-- Top bar -->
@@ -33,19 +57,25 @@
                 <div id="breadcrumb"></div>
 
                 <div class="controls">
-                    <button onclick="changeFont(-1)">A-</button>
-                    <button onclick="changeFont(1)">A+</button>
-                    <button onclick="toggleTheme()">🌙</button>
+                    <button class="control-btn" onclick="changeFontSize(-1)" title="Decrease Font Size">
+                        <i data-lucide="minus" size="16"></i>
+                    </button>
+                    <button class="control-btn" onclick="changeFontSize(1)" title="Increase Font Size">
+                        <i data-lucide="plus" size="16"></i>
+                    </button>
+                    <button id="themeToggle" class="control-btn" onclick="toggleTheme()" title="Toggle Dark Mode">
+                        <i data-lucide="moon" size="16"></i>
+                    </button>
                 </div>
             </div>
 
             <!-- Editor -->
             <div class="editor-container">
                 <div id="lineNumbers" class="line-numbers"></div>
-                <textarea id="editor"></textarea>
+                <textarea id="editor" spellcheck="false" placeholder="Start typing..."></textarea>
             </div>
 
-            <!-- Status -->
+            <!-- Status Bar -->
             <div class="statusbar">
                 <span id="cursorPos">Ln 1, Col 1</span>
             </div>
@@ -54,7 +84,36 @@
 
     </div>
 
+    <!-- Modal Overlay -->
+    <div id="modalOverlay" class="modal-overlay">
+        <div class="modal-container">
+            <div id="modalTitle" class="modal-title">Enter name</div>
+            <input id="modalInput" class="modal-input" type="text" spellcheck="false" />
+            <div id="modalMessage" class="modal-message hidden"></div>
+            <div class="modal-actions">
+                <div id="modalInputHint" class="modal-hint">Press <b>Enter</b> to confirm, <b>Esc</b> to cancel</div>
+                <div id="modalConfirmButtons" class="modal-buttons hidden">
+                    <button id="modalCancelBtn" class="modal-btn secondary">Cancel</button>
+                    <button id="modalConfirmBtn" class="modal-btn primary">Confirm</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Context Menu -->
+    <div id="contextMenu" class="context-menu hidden">
+        <div class="context-menu-item" id="ctxExport">
+            <i data-lucide="download" size="14"></i> Export as ZIP
+        </div>
+    </div>
+
     <script src="script.js"></script>
+
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+    </script>
 </body>
 
 </html>
