@@ -14,11 +14,12 @@ localKeep is a minimalist yet powerful notes application designed for those who 
 - **File Management**: Create, rename, delete, and organize notes into nested folders.
 - **Drag & Drop**: Intuitively reorganize your file tree with smooth drag-and-drop interactions.
 - **Custom Themes**: Seamlessly switch between a vibrant Light mode and a sleek Dark mode.
-- **Powerful Search**: Instantly find notes with recursive searching across all folders.
+- **Search**: Instantly find notes by name with recursive filtering across all folders.
 - **Export & Import**: Backup your entire workspace or specific folders as ZIP files.
-- **Keyboard Optimized**: Custom modals and keyboard shortcuts for a streamlined workflow.
-- **Auto-Save**: Never lose a thought; every keystroke is persisted in real-time.
+- **Keyboard Optimized**: Modal dialogs with Enter/Esc shortcuts for a streamlined workflow.
+- **Auto-Save**: Never lose a thought; every keystroke is persisted to localStorage in real-time.
 - **Technical Polish**: Line numbering, cursor position tracking, and breadcrumb navigation.
+- **Adjustable Font Size**: Increase or decrease editor font size to suit your preference.
 
 ## Privacy First
 
@@ -41,6 +42,21 @@ Since localKeep is a pure client-side application, you can run it anywhere:
 
 Alternatively, you can host it on **GitHub Pages**, **Vercel**, or any static hosting provider.
 
+## Usage
+
+| Action | How |
+|---|---|
+| New file | Click **File** button or select a folder first to create inside it |
+| New folder | Click **Folder** button |
+| Rename | Click the edit icon on any file/folder in the tree |
+| Delete | Click the trash icon on any file/folder |
+| Move | Drag and drop items onto folders or empty space (root) |
+| Export all | Click **Export** in the sidebar |
+| Export folder | Right-click a folder and select **Export as ZIP** |
+| Import | Click **Import** and select a previously exported ZIP file |
+| Toggle theme | Click the moon/sun icon in the top bar |
+| Adjust font size | Click **+** or **-** in the top bar |
+
 ## Built With
 
 - **HTML5 Semantic Structure**
@@ -48,6 +64,13 @@ Alternatively, you can host it on **GitHub Pages**, **Vercel**, or any static ho
 - **Vanilla JavaScript** (ES6+)
 - **[Lucide Icons](https://lucide.dev/)** for consistent iconography
 - **[JSZip](https://stuk.github.io/jszip/)** for client-side ZIP generation
+
+## Known Limitations
+
+- Search only matches file and folder names, not note content.
+- Duplicate file/folder names are allowed within the same directory.
+- The Tab key does not insert a tab character in the editor.
+- Imported files are merged silently without a preview or summary.
 
 ## Contributing
 

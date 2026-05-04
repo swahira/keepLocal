@@ -5,7 +5,13 @@ document.addEventListener("DOMContentLoaded", () => {
     let theme = "light";
     let fontSize = 15;
     let searchQuery = "";
-    let draggedId = null;
+    let importIdCounter = 0;
+
+    function generateImportId(type) {
+        importIdCounter++;
+        const prefix = type === "folder" ? "d_" : "f_";
+        return prefix + Date.now() + "_" + importIdCounter + "_" + Math.random().toString(36).slice(2, 9);
+    }
 
     const editor = document.getElementById("editor");
     const lineNumbers = document.getElementById("lineNumbers");
@@ -112,6 +118,31 @@ document.addEventListener("DOMContentLoaded", () => {
         return null;
     }
 
+    function nameExistsInArray(array, name, excludeId = null) {
+        return array.some(node => node.id !== excludeId && node.name.toLowerCase() === name.toLowerCase());
+    }
+
+    function countNodes(folder) {
+        let count = 0;
+        if (folder.children) {
+            for (const child of folder.children) {
+                if (child.type === "file") count++;
+                else if (child.children) count += countNodes(child);
+            }
+        }
+        return count;
+    }
+
+    function countFolders(folder) {
+        let count = 0;
+        if (folder.children) {
+            for (const child of folder.children) {
+                if (child.type === "folder") count += 1 + countFolders(child);
+            }
+        }
+        return count;
+    }
+
     // --- Modal Logic ---
     const modalOverlay = document.getElementById("modalOverlay");
     const modalTitle = document.getElementById("modalTitle");
@@ -205,6 +236,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         showInputModal("New File name:", "note.txt", (name) => {
             if (!name) return;
+            if (nameExistsInArray(target.array, name)) {
+                showConfirmModal("Duplicate Name", `A file or folder named "${name}" already exists here.`, () => {});
+                return;
+            }
             const newFile = {
                 id: "f_" + Date.now(),
                 name: name,
@@ -225,6 +260,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         showInputModal("New Folder name:", "New Folder", (name) => {
             if (!name) return;
+            if (nameExistsInArray(target.array, name)) {
+                showConfirmModal("Duplicate Name", `A file or folder named "${name}" already exists here.`, () => {});
+                return;
+            }
             const newFolder = {
                 id: "d_" + Date.now(),
                 name: name,
@@ -245,12 +284,17 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!node) return;
 
         showInputModal("Rename to:", node.name, (newName) => {
-            if (newName && newName !== node.name) {
-                node.name = newName;
-                saveData();
-                render();
-                updateBreadcrumbs();
+            if (!newName || newName === node.name) return;
+            const parent = findParent(files, id);
+            const siblings = parent ? parent.children : files;
+            if (nameExistsInArray(siblings, newName, id)) {
+                showConfirmModal("Duplicate Name", `A file or folder named "${newName}" already exists here.`, () => {});
+                return;
             }
+            node.name = newName;
+            saveData();
+            render();
+            updateBreadcrumbs();
         });
     };
 
@@ -287,11 +331,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Safety check: Cannot move folder into itself or its descendants
         if (sourceNode.type === "folder") {
-            const isDescendant = (nodes, id) => {
-                const node = findNode(nodes, id);
-                return !!getPath(targetId, [sourceNode]);
+            const containsDescendant = (nodes, id) => {
+                for (const child of nodes) {
+                    if (child.id === id) return true;
+                    if (child.children && containsDescendant(child.children, id)) return true;
+                }
+                return false;
             };
-            if (sourceId === targetId || isDescendant(sourceNode.children, targetId)) {
+            if (sourceId === targetId || containsDescendant(sourceNode.children, targetId)) {
                 return;
             }
         }
@@ -384,7 +431,7 @@ document.addEventListener("DOMContentLoaded", () => {
                             const fullPath = currentPath ? `${currentPath}/${dirName}` : dirName;
                             if (!folders[fullPath]) {
                                 const newFolder = {
-                                    id: "d_" + Date.now() + Math.random(),
+                                    id: generateImportId("folder"),
                                     name: dirName,
                                     type: "folder",
                                     isOpen: true,
@@ -398,7 +445,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         });
 
                         currentArray.push({
-                            id: "f_" + Date.now() + Math.random(),
+                            id: generateImportId("file"),
                             name: fileName,
                             type: "file",
                             content: content
@@ -412,6 +459,17 @@ document.addEventListener("DOMContentLoaded", () => {
             saveData();
             render();
             event.target.value = "";
+
+            const fileCount = importedNodes.reduce((count, node) => {
+                if (node.type === "file") return count + 1;
+                if (node.children) return count + countNodes(node);
+                return count;
+            }, 0);
+            const folderCount = importedNodes.reduce((count, node) => {
+                if (node.type === "folder") return count + 1 + countFolders(node);
+                return count;
+            }, 0);
+            showConfirmModal("Import Complete", `Imported ${fileCount} file${fileCount !== 1 ? "s" : ""} and ${folderCount} folder${folderCount !== 1 ? "s" : ""}.`, () => {});
         };
         reader.readAsArrayBuffer(file);
     };
@@ -458,7 +516,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (searchQuery) {
                 if (node.type === "file") {
-                    shouldShow = node.name.toLowerCase().includes(searchQuery);
+                    shouldShow = node.name.toLowerCase().includes(searchQuery) || (node.content && node.content.toLowerCase().includes(searchQuery));
                 } else {
                     // Check if any child matches (recursively)
                     hasMatchingChild = checkHasMatchingChild(node, searchQuery);
@@ -539,8 +597,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (node.type === "folder") {
                     e.preventDefault();
                     contextNodeId = node.id;
-                    contextMenu.style.top = e.pageY + "px";
-                    contextMenu.style.left = e.pageX + "px";
+                    const menuWidth = 180;
+                    const menuHeight = 50;
+                    let top = e.pageY;
+                    let left = e.pageX;
+                    if (top + menuHeight > window.innerHeight) top = window.innerHeight - menuHeight;
+                    if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth;
+                    contextMenu.style.top = top + "px";
+                    contextMenu.style.left = left + "px";
                     contextMenu.classList.remove("hidden");
                 }
             };
@@ -557,7 +621,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!folder.children) return false;
         return folder.children.some(child => {
             if (child.type === "file") {
-                return child.name.toLowerCase().includes(query);
+                return child.name.toLowerCase().includes(query) || (child.content && child.content.toLowerCase().includes(query));
             } else {
                 return checkHasMatchingChild(child, query);
             }
@@ -601,26 +665,13 @@ document.addEventListener("DOMContentLoaded", () => {
             editor.disabled = false;
             editor.placeholder = "Start typing...";
         } else {
-            // ONLY create Untitled.txt if there are NO files in the entire system
             const hasAnyFile = !!findFirstFile(files);
-            
+
             if (!hasAnyFile) {
-                const newFile = {
-                    id: "f_" + Date.now(),
-                    name: "Untitled.txt",
-                    type: "file",
-                    content: ""
-                };
-                files.push(newFile);
-                selectedId = newFile.id;
-                saveData();
-                render();
-                
                 editor.value = "";
                 editor.disabled = false;
-                editor.placeholder = "Start typing...";
+                editor.placeholder = "Create a file to get started...";
             } else {
-                // If there ARE files but none are currently selected/found (should be rare now)
                 editor.value = "";
                 editor.disabled = true;
                 editor.placeholder = "Select a file to edit";
@@ -668,6 +719,17 @@ document.addEventListener("DOMContentLoaded", () => {
             saveData();
         }
         updateLines();
+    });
+
+    editor.addEventListener("keydown", (e) => {
+        if (e.key === "Tab") {
+            e.preventDefault();
+            const start = editor.selectionStart;
+            const end = editor.selectionEnd;
+            editor.value = editor.value.substring(0, start) + "    " + editor.value.substring(end);
+            editor.selectionStart = editor.selectionEnd = start + 4;
+            editor.dispatchEvent(new Event("input"));
+        }
     });
 
     editor.addEventListener("keyup", updateCursorPos);
