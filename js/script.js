@@ -1,11 +1,17 @@
 document.addEventListener("DOMContentLoaded", () => {
-	// --- State ---
-	let files = [];
-	let selectedId = null;
-	let theme = "light";
-	let fontSize = 15;
-	let searchQuery = "";
-	let draggedId = null;
+    // --- State ---
+    let files = [];
+    let selectedId = null;
+    let theme = "light";
+    let fontSize = 15;
+    let searchQuery = "";
+    let importIdCounter = 0;
+
+    function generateImportId(type) {
+        importIdCounter++;
+        const prefix = type === "folder" ? "d_" : "f_";
+        return prefix + Date.now() + "_" + importIdCounter + "_" + Math.random().toString(36).slice(2, 9);
+    }
 
 	const editor = document.getElementById("editor");
 	const lineNumbers = document.getElementById("lineNumbers");
@@ -120,48 +126,41 @@ document.addEventListener("DOMContentLoaded", () => {
 		return null;
 	}
 
-	function findFirstFile(nodes) {
-		for (let node of nodes) {
-			if (node.type === "file") return node;
-			if (node.children) {
-				let found = findFirstFile(node.children);
-				if (found) return found;
-			}
-		}
-		return null;
-	}
+    function findFirstFile(nodes) {
+        for (let node of nodes) {
+            if (node.type === "file") return node;
+            if (node.children) {
+                let found = findFirstFile(node.children);
+                if (found) return found;
+            }
+        }
+        return null;
+    }
 
-	function generateUntitledName(nodes) {
-		let index = 1;
-		let name = "Untitled.txt";
-		const existingNames = new Set(
-			(nodes || []).map((node) => node.name.toLowerCase()),
-		);
+    function nameExistsInArray(array, name, excludeId = null) {
+        return array.some(node => node.id !== excludeId && node.name.toLowerCase() === name.toLowerCase());
+    }
 
-		while (existingNames.has(name.toLowerCase())) {
-			index += 1;
-			name = `Untitled${index}.txt`;
-		}
+    function countNodes(folder) {
+        let count = 0;
+        if (folder.children) {
+            for (const child of folder.children) {
+                if (child.type === "file") count++;
+                else if (child.children) count += countNodes(child);
+            }
+        }
+        return count;
+    }
 
-		return name;
-	}
-
-	function createUntitledFile(targetArray, parentNode, content = "") {
-		const newFile = {
-			id: "f_" + Date.now() + Math.random(),
-			name: generateUntitledName(targetArray),
-			type: "file",
-			content,
-		};
-
-		targetArray.push(newFile);
-		if (parentNode) parentNode.isOpen = true;
-		selectedId = newFile.id;
-		saveData();
-		render();
-		loadFile();
-		return newFile;
-	}
+    function countFolders(folder) {
+        let count = 0;
+        if (folder.children) {
+            for (const child of folder.children) {
+                if (child.type === "folder") count += 1 + countFolders(child);
+            }
+        }
+        return count;
+    }
 
 	// --- Modal Logic ---
 	const modalOverlay = document.getElementById("modalOverlay");
@@ -253,56 +252,70 @@ document.addEventListener("DOMContentLoaded", () => {
 	window.addFile = function () {
 		const target = getTarget();
 
-		showInputModal("New File name:", "note.txt", (name) => {
-			if (!name) return;
-			const newFile = {
-				id: "f_" + Date.now(),
-				name: name,
-				type: "file",
-				content: "",
-			};
-			target.array.push(newFile);
-			if (target.node) target.node.isOpen = true;
-			selectedId = newFile.id;
-			saveData();
-			render();
-			loadFile();
-		});
-	};
+        showInputModal("New File name:", "note.txt", (name) => {
+            if (!name) return;
+            if (nameExistsInArray(target.array, name)) {
+                showConfirmModal("Duplicate Name", `A file or folder named "${name}" already exists here.`, () => {});
+                return;
+            }
+            const newFile = {
+                id: "f_" + Date.now(),
+                name: name,
+                type: "file",
+                content: ""
+            };
+            target.array.push(newFile);
+            if (target.node) target.node.isOpen = true;
+            selectedId = newFile.id;
+            saveData();
+            render();
+            loadFile();
+        });
+    };
 
 	window.addFolder = function () {
 		const target = getTarget();
 
-		showInputModal("New Folder name:", "New Folder", (name) => {
-			if (!name) return;
-			const newFolder = {
-				id: "d_" + Date.now(),
-				name: name,
-				type: "folder",
-				isOpen: true,
-				children: [],
-			};
-			target.array.push(newFolder);
-			if (target.node) target.node.isOpen = true;
-			selectedId = newFolder.id;
-			saveData();
-			render();
-		});
-	};
+        showInputModal("New Folder name:", "New Folder", (name) => {
+            if (!name) return;
+            if (nameExistsInArray(target.array, name)) {
+                showConfirmModal("Duplicate Name", `A file or folder named "${name}" already exists here.`, () => {});
+                return;
+            }
+            const newFolder = {
+                id: "d_" + Date.now(),
+                name: name,
+                type: "folder",
+                isOpen: true,
+                children: []
+            };
+            target.array.push(newFolder);
+            if (target.node) target.node.isOpen = true;
+            selectedId = newFolder.id;
+            saveData();
+            render();
+        });
+    };
 
 	window.renameNode = function (id) {
 		const node = findNode(files, id);
 		if (!node) return;
 
-		showInputModal("Rename to:", node.name, (newName) => {
-			if (newName && newName !== node.name) {
-				node.name = newName;
-				saveData();
-				render();
-				updateBreadcrumbs();
-			}
-		});
-	};
+        showInputModal("Rename to:", node.name, (newName) => {
+            if (!newName || newName === node.name) return;
+            const parent = findParent(files, id);
+            const siblings = parent ? parent.children : files;
+            if (nameExistsInArray(siblings, newName, id)) {
+                showConfirmModal("Duplicate Name", `A file or folder named "${newName}" already exists here.`, () => {});
+                return;
+            }
+            node.name = newName;
+            saveData();
+            render();
+            updateBreadcrumbs();
+        });
+    };
+
 
 	window.deleteNode = function (id) {
 		const node = findNode(files, id);
@@ -337,19 +350,19 @@ document.addEventListener("DOMContentLoaded", () => {
 		const sourceNode = findNode(files, sourceId);
 		if (!sourceNode) return;
 
-		// Safety check: Cannot move folder into itself or its descendants
-		if (sourceNode.type === "folder") {
-			const isDescendant = (nodes, id) => {
-				const node = findNode(nodes, id);
-				return !!getPath(targetId, [sourceNode]);
-			};
-			if (
-				sourceId === targetId ||
-				isDescendant(sourceNode.children, targetId)
-			) {
-				return;
-			}
-		}
+        // Safety check: Cannot move folder into itself or its descendants
+        if (sourceNode.type === "folder") {
+            const containsDescendant = (nodes, id) => {
+                for (const child of nodes) {
+                    if (child.id === id) return true;
+                    if (child.children && containsDescendant(child.children, id)) return true;
+                }
+                return false;
+            };
+            if (sourceId === targetId || containsDescendant(sourceNode.children, targetId)) {
+                return;
+            }
+        }
 
 		// Remove from old parent
 		const oldParent = findParent(files, sourceId);
@@ -422,62 +435,69 @@ document.addEventListener("DOMContentLoaded", () => {
 		const file = event.target.files[0];
 		if (!file) return;
 
-		const reader = new FileReader();
-		reader.onload = async (e) => {
-			const zip = await JSZip.loadAsync(e.target.result);
-			const importedNodes = [];
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            const zip = await JSZip.loadAsync(e.target.result);
+            const importedNodes = [];
+            
+            const folders = { "": importedNodes };
+            const promises = [];
+            zip.forEach((relativePath, file) => {
+                if (!file.dir) {
+                    promises.push((async () => {
+                        const content = await file.async("string");
+                        const parts = relativePath.split("/");
+                        const fileName = parts.pop();
+                        
+                        let currentArray = importedNodes;
+                        let currentPath = "";
+                        
+                        parts.forEach(dirName => {
+                            const fullPath = currentPath ? `${currentPath}/${dirName}` : dirName;
+                            if (!folders[fullPath]) {
+                                const newFolder = {
+                                    id: generateImportId("folder"),
+                                    name: dirName,
+                                    type: "folder",
+                                    isOpen: true,
+                                    children: []
+                                };
+                                currentArray.push(newFolder);
+                                folders[fullPath] = newFolder.children;
+                            }
+                            currentArray = folders[fullPath];
+                            currentPath = fullPath;
+                        });
 
-			const folders = { "": importedNodes };
-			const promises = [];
-			zip.forEach((relativePath, file) => {
-				if (!file.dir) {
-					promises.push(
-						(async () => {
-							const content = await file.async("string");
-							const parts = relativePath.split("/");
-							const fileName = parts.pop();
+                        currentArray.push({
+                            id: generateImportId("file"),
+                            name: fileName,
+                            type: "file",
+                            content: content
+                        });
+                    })());
+                }
+            });
 
-							let currentArray = importedNodes;
-							let currentPath = "";
+            await Promise.all(promises);
+            files = [...files, ...importedNodes];
+            saveData();
+            render();
+            event.target.value = "";
 
-							parts.forEach((dirName) => {
-								const fullPath = currentPath
-									? `${currentPath}/${dirName}`
-									: dirName;
-								if (!folders[fullPath]) {
-									const newFolder = {
-										id: "d_" + Date.now() + Math.random(),
-										name: dirName,
-										type: "folder",
-										isOpen: true,
-										children: [],
-									};
-									currentArray.push(newFolder);
-									folders[fullPath] = newFolder.children;
-								}
-								currentArray = folders[fullPath];
-								currentPath = fullPath;
-							});
-
-							currentArray.push({
-								id: "f_" + Date.now() + Math.random(),
-								name: fileName,
-								type: "file",
-								content: content,
-							});
-						})(),
-					);
-				}
-			});
-
-			await Promise.all(promises);
-			files = [...files, ...importedNodes];
-			saveData();
-			render();
-			event.target.value = "";
-		};
-		reader.readAsArrayBuffer(file);
-	};
+            const fileCount = importedNodes.reduce((count, node) => {
+                if (node.type === "file") return count + 1;
+                if (node.children) return count + countNodes(node);
+                return count;
+            }, 0);
+            const folderCount = importedNodes.reduce((count, node) => {
+                if (node.type === "folder") return count + 1 + countFolders(node);
+                return count;
+            }, 0);
+            showConfirmModal("Import Complete", `Imported ${fileCount} file${fileCount !== 1 ? "s" : ""} and ${folderCount} folder${folderCount !== 1 ? "s" : ""}.`, () => {});
+        };
+        reader.readAsArrayBuffer(file);
+    };
 
 	// --- Context Menu Logic ---
 	const contextMenu = document.getElementById("contextMenu");
@@ -517,15 +537,15 @@ document.addEventListener("DOMContentLoaded", () => {
 			let shouldShow = true;
 			let hasMatchingChild = false;
 
-			if (searchQuery) {
-				if (node.type === "file") {
-					shouldShow = node.name.toLowerCase().includes(searchQuery);
-				} else {
-					// Check if any child matches (recursively)
-					hasMatchingChild = checkHasMatchingChild(node, searchQuery);
-					shouldShow = hasMatchingChild;
-				}
-			}
+            if (searchQuery) {
+                if (node.type === "file") {
+                    shouldShow = node.name.toLowerCase().includes(searchQuery) || (node.content && node.content.toLowerCase().includes(searchQuery));
+                } else {
+                    // Check if any child matches (recursively)
+                    hasMatchingChild = checkHasMatchingChild(node, searchQuery);
+                    shouldShow = hasMatchingChild;
+                }
+            }
 
 			if (!shouldShow) return;
 
@@ -604,15 +624,21 @@ document.addEventListener("DOMContentLoaded", () => {
 				render();
 			};
 
-			item.oncontextmenu = (e) => {
-				if (node.type === "folder") {
-					e.preventDefault();
-					contextNodeId = node.id;
-					contextMenu.style.top = e.pageY + "px";
-					contextMenu.style.left = e.pageX + "px";
-					contextMenu.classList.remove("hidden");
-				}
-			};
+            item.oncontextmenu = (e) => {
+                if (node.type === "folder") {
+                    e.preventDefault();
+                    contextNodeId = node.id;
+                    const menuWidth = 180;
+                    const menuHeight = 50;
+                    let top = e.pageY;
+                    let left = e.pageX;
+                    if (top + menuHeight > window.innerHeight) top = window.innerHeight - menuHeight;
+                    if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth;
+                    contextMenu.style.top = top + "px";
+                    contextMenu.style.left = left + "px";
+                    contextMenu.classList.remove("hidden");
+                }
+            };
 
 			container.appendChild(item);
 
@@ -622,16 +648,17 @@ document.addEventListener("DOMContentLoaded", () => {
 		});
 	}
 
-	function checkHasMatchingChild(folder, query) {
-		if (!folder.children) return false;
-		return folder.children.some((child) => {
-			if (child.type === "file") {
-				return child.name.toLowerCase().includes(query);
-			} else {
-				return checkHasMatchingChild(child, query);
-			}
-		});
-	}
+    function checkHasMatchingChild(folder, query) {
+        if (!folder.children) return false;
+        return folder.children.some(child => {
+            if (child.type === "file") {
+                return child.name.toLowerCase().includes(query) || (child.content && child.content.toLowerCase().includes(query));
+            } else {
+                return checkHasMatchingChild(child, query);
+            }
+        });
+    }
+
 
 	function updateBreadcrumbs() {
 		const path = getPath(selectedId);
@@ -664,23 +691,29 @@ document.addEventListener("DOMContentLoaded", () => {
 			}
 		}
 
-		if (file && file.type === "file") {
-			editor.value = file.content || "";
-			editor.disabled = false;
-			editor.placeholder = "Start typing...";
-		} else if (file && file.type === "folder") {
-			editor.value = "";
-			editor.disabled = false;
-			editor.placeholder =
-				"Start typing to create a new note in this folder...";
-		} else {
-			editor.value = "";
-			editor.disabled = false;
-			editor.placeholder = "Select a folder or file to edit";
-		}
-		updateLines();
-		updateBreadcrumbs();
-	}
+        if (file && file.type === "file") {
+            editor.value = file.content || "";
+            editor.disabled = false;
+            editor.placeholder = "Start typing...";
+        } else {
+            const hasAnyFile = !!findFirstFile(files);
+
+            if (!hasAnyFile) {
+                editor.value = "";
+                editor.disabled = false;
+                editor.placeholder = "Create a file to get started...";
+            } else {
+                editor.value = "";
+                editor.disabled = true;
+                editor.placeholder = "Select a file to edit";
+            }
+        }
+        updateLines();
+        updateBreadcrumbs();
+    }
+
+
+
 
 	function updateLines() {
 		const lines = editor.value.split("\n");
@@ -708,17 +741,26 @@ document.addEventListener("DOMContentLoaded", () => {
 		if (window.lucide) lucide.createIcons();
 	}
 
-	// --- Events ---
-	editor.addEventListener("input", () => {
-		const node = findNode(files, selectedId);
-		if (node && node.type === "file") {
-			node.content = editor.value;
-			saveData();
-		} else if (node && node.type === "folder") {
-			createUntitledFile(node.children || [], node, editor.value);
-		}
-		updateLines();
-	});
+    // --- Events ---
+    editor.addEventListener("input", () => {
+        const file = findNode(files, selectedId);
+        if (file && file.type === "file") {
+            file.content = editor.value;
+            saveData();
+        }
+        updateLines();
+    });
+
+    editor.addEventListener("keydown", (e) => {
+        if (e.key === "Tab") {
+            e.preventDefault();
+            const start = editor.selectionStart;
+            const end = editor.selectionEnd;
+            editor.value = editor.value.substring(0, start) + "    " + editor.value.substring(end);
+            editor.selectionStart = editor.selectionEnd = start + 4;
+            editor.dispatchEvent(new Event("input"));
+        }
+    });
 
 	editor.addEventListener("keyup", updateCursorPos);
 	editor.addEventListener("click", updateCursorPos);
