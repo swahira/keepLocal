@@ -1,5 +1,31 @@
 :root {
-	/* Light Theme */
+	/* Backgrounds */
+	--bg-primary: #FFFFFF;
+	--bg-secondary: #F9FAFB;
+	--bg-tertiary: #ECFDF5;
+
+	/* Text */
+	--text-primary: #111827;
+	--text-secondary: #6B7280;
+	--text-muted: #9CA3AF;
+
+	/* Borders */
+	--border-color: #D1FAE5;
+
+	/* Brand */
+	--accent-color: #10B981;
+	--accent-hover: #74e4c0;
+
+	/* States */
+	--selection: #D1FAE5;
+	--hover-bg: #ECFDF5;
+	--active-bg: #A7F3D0;
+}
+
+
+
+/* :root {
+	
 	--bg-primary: #ffffff;
 	--bg-secondary: #f9fafb;
 	--bg-tertiary: #f3f4f6;
@@ -7,16 +33,16 @@
 	--text-secondary: #4b5563;
 	--text-muted: #9ca3af;
 	--border-color: #e5e7eb;
-	--accent-color: #3b82f6;
-	--accent-hover: #2563eb;
+	--accent-color: #10B981;
+	--accent-hover: #0eb38f;
 	--selection: #dbeafe;
 	--sidebar-width: 280px;
 	--header-height: 56px;
 	--footer-height: 28px;
 	--transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
+} */
 
-[data-theme="dark"] {
+/* [data-theme="dark"] {
 	--bg-primary: #111827;
 	--bg-secondary: #1f2937;
 	--bg-tertiary: #374151;
@@ -24,9 +50,29 @@
 	--text-secondary: #d1d5db;
 	--text-muted: #6b7280;
 	--border-color: #374151;
-	--accent-color: #60a5fa;
-	--accent-hover: #93c5fd;
-	--selection: #1e3a8a;
+	--accent-color: #10B981;
+	--accent-hover: #0eb38f;
+	--selection: #52c09b;
+} */
+
+[data-theme="dark"] {
+	--bg-primary: #06110d;
+	--bg-secondary: #0b1612;
+	--bg-tertiary: #131f19;
+
+	--text-primary: #F8FAFC;
+	--text-secondary: #CBD5E1;
+	--text-muted: #94A3B8;
+
+	--border-color: #335748;
+
+	--accent-color: #10B981;
+	--accent-hover: #4acfa5;
+
+	--selection: #1a5344;
+
+	--hover-bg: #13271f;
+	--active-bg: #065F46;
 }
 
 * {
@@ -131,13 +177,13 @@ body {
 }
 
 .btn.primary {
-	background: linear-gradient(135deg, var(--accent-color), #2563eb);
+	background: linear-gradient(135deg, var(--accent-color), #12cf90);
 	color: white;
 	border: none;
 }
 
 .btn.primary:hover {
-	background: linear-gradient(135deg, var(--accent-hover), #1d4ed8);
+	background: linear-gradient(135deg, var(--accent-hover), #10b981);
 }
 
 /* Search */
@@ -208,7 +254,7 @@ body {
 	flex-shrink: 0;
 }
 
-.file-item > span:not(.icon):not(.actions) {
+.file-item>span:not(.icon):not(.actions) {
 	flex: 1;
 	min-width: 0;
 	white-space: nowrap;
