@@ -667,7 +667,7 @@ textarea {
 	justify-content: center;
 	gap: 8px;
 
-	background: var(--bg-secondary);
+	background: var(--bg-primary);
 	color: var(--text-primary);
 
 	border: 1px solid var(--border-color);
@@ -681,12 +681,29 @@ textarea {
 }
 
 .save-workspace-btn:hover {
-	border-color: #10B981;
-	color: #10B981;
-	background: rgba(16, 185, 129, 0.08);
+	border-color: #335748;
+	color: var(--text-primary);
+	background: var(--bg-tertiary);
+	transform: translateY(-2px);
+	box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 .save-workspace-btn i {
 	width: 16px;
 	height: 16px;
+}
+.save-workspace-btn {
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+.save-workspace-btn:active {
+    transform: translateY(0);
+}
+.save-workspace-btn.primary {
+	background: linear-gradient(135deg, var(--accent-color), #12cf90);
+	color: white;
+	border: none;
+}
+
+.save-workspace-btn.primary:hover {
+	background: linear-gradient(135deg, var(--accent-hover), #10b981);
 }

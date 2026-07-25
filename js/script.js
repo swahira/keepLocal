@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", async() => {
+document.addEventListener("DOMContentLoaded", async () => {
 	// --- State ---
 	let files = [];
 	let selectedId = null;
@@ -271,6 +271,7 @@ document.addEventListener("DOMContentLoaded", async() => {
 			saveData();
 			render();
 			loadFile();
+			syncWorkspace();
 		});
 	};
 
@@ -295,6 +296,7 @@ document.addEventListener("DOMContentLoaded", async() => {
 			selectedId = newFolder.id;
 			saveData();
 			render();
+			syncWorkspace();
 		});
 	};
 
@@ -314,6 +316,7 @@ document.addEventListener("DOMContentLoaded", async() => {
 			saveData();
 			render();
 			updateBreadcrumbs();
+			syncWorkspace();
 		});
 	};
 
@@ -341,6 +344,7 @@ document.addEventListener("DOMContentLoaded", async() => {
 				}
 				saveData();
 				render();
+				syncWorkspace();
 			},
 		);
 	};
@@ -392,6 +396,7 @@ document.addEventListener("DOMContentLoaded", async() => {
 
 		saveData();
 		render();
+		syncWorkspace();
 	};
 
 	// --- Export / Import Logic ---
@@ -484,6 +489,7 @@ document.addEventListener("DOMContentLoaded", async() => {
 			files = [...files, ...importedNodes];
 			saveData();
 			render();
+			syncWorkspace();
 			event.target.value = "";
 
 			const fileCount = importedNodes.reduce((count, node) => {
@@ -743,14 +749,12 @@ document.addEventListener("DOMContentLoaded", async() => {
 	}
 
 	// --- Events ---
-	editor.addEventListener("input", async() => {
+	editor.addEventListener("input", async () => {
 		const file = findNode(files, selectedId);
 		if (file && file.type === "file") {
 			file.content = editor.value;
 			saveData();
-			if (workspaceHandle) {
-				await saveNodes(workspaceHandle, files);
-			}
+			await syncWorkspace();
 		}
 		updateLines();
 	});
@@ -799,20 +803,38 @@ document.addEventListener("DOMContentLoaded", async() => {
 			}
 		}
 	}
+
+	async function syncWorkspace() {
+		if (!workspaceHandle) return;
+
+		// Remove everything from the selected folder
+		// for await (const [name] of workspaceHandle.entries()) {
+		// 	await workspaceHandle.removeEntry(name, {
+		// 		recursive: true
+		// 	});
+		// }
+
+		// Recreate the workspace
+		await saveNodes(workspaceHandle, files);
+	}
+
 	window.saveWorkspace = async function () {
+
 		try {
-			const directoryHandler = await window.showDirectoryPicker();
-			await saveNodes(workspaceHandle, files);
-			alert("Workspace saved successfully!");
+			workspaceHandle = await window.showDirectoryPicker({
+				mode: "readwrite"
+			});
+			await syncWorkspace();
+			alert("Workspace connected!");
 		} catch (err) {
-			console.error(err);
 
 			if (err.name !== "AbortError") {
-				alert("Unable to save workspace.");
+				console.error(err);
 			}
+
 		}
 
-	};
+	}
 	// --- Init ---
 	loadData();
 	render();
