@@ -655,3 +655,38 @@ textarea {
 .file-item {
 	animation: fadeIn 0.3s ease forwards;
 }
+
+/* save workspace button  */
+.save-workspace-btn {
+	width: calc(100% - 24px);
+	margin: 10px 12px 14px;
+	height: 42px;
+
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+
+	background: var(--bg-secondary);
+	color: var(--text-primary);
+
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+
+	transition: all 0.2s ease;
+}
+
+.save-workspace-btn:hover {
+	border-color: #10B981;
+	color: #10B981;
+	background: rgba(16, 185, 129, 0.08);
+}
+
+.save-workspace-btn i {
+	width: 16px;
+	height: 16px;
+}
