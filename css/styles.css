@@ -655,3 +655,55 @@ textarea {
 .file-item {
 	animation: fadeIn 0.3s ease forwards;
 }
+
+/* save workspace button  */
+.save-workspace-btn {
+	width: calc(100% - 24px);
+	margin: 10px 12px 14px;
+	height: 42px;
+
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+
+	background: var(--bg-primary);
+	color: var(--text-primary);
+
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+
+	transition: all 0.2s ease;
+}
+
+.save-workspace-btn:hover {
+	border-color: #335748;
+	color: var(--text-primary);
+	background: var(--bg-tertiary);
+	transform: translateY(-2px);
+	box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.save-workspace-btn i {
+	width: 16px;
+	height: 16px;
+}
+.save-workspace-btn {
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+.save-workspace-btn:active {
+    transform: translateY(0);
+}
+.save-workspace-btn.primary {
+	background: linear-gradient(135deg, var(--accent-color), #12cf90);
+	color: white;
+	border: none;
+}
+
+.save-workspace-btn.primary:hover {
+	background: linear-gradient(135deg, var(--accent-hover), #10b981);
+}
