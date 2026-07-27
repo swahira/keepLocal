@@ -21,7 +21,15 @@
 
         <!-- Sidebar -->
         <div class="sidebar">
-            <div class="toolbar">
+
+            <div class="logo-container">
+                <img class="logo" src="assets/keeplocal.png" alt="keeplocal" />
+                <div class="logo-text">
+                    <h1>Keep<span>Local</span></h1>
+                    <p>Your Local Editor</p>
+                </div>
+            </div>
+            <!-- <div class="toolbar">
                 <button class="btn primary" onclick="addFile()" title="New File">
                     <i data-lucide="file-plus" size="18"></i>
                     <span>File</span>
@@ -30,15 +38,32 @@
                     <i data-lucide="folder-plus" size="18"></i>
                     <span>Folder</span>
                 </button>
+            </div> -->
+
+            <div class="toolbar">
+                <button class="btn primary" onclick="addFile()" title="New File">
+                    <i data-lucide="file-plus" size="18"></i>
+                    <!-- <span>File</span> -->
+                </button>
+                <button class="btn" onclick="addFolder()" title="New Folder">
+                    <i data-lucide="folder-plus" size="18"></i>
+                    <!-- <span>Folder</span> -->
+                </button>
+                <button class="btn-small" onclick="exportAll()" title="Export All as ZIP">
+                    <i data-lucide="download" size="14"></i> 
+                </button>
+                <button class="btn-small" onclick="document.getElementById('importInput').click()" title="Import ZIP">
+                    <i data-lucide="upload" size="14"></i> 
+                </button>
             </div>
 
             <div class="toolbar secondary-toolbar">
-                <button class="btn-small" onclick="exportAll()" title="Export All as ZIP">
-                    <i data-lucide="download" size="14"></i> Export
+                <!-- <button class="btn-small" onclick="exportAll()" title="Export All as ZIP">
+                    <i data-lucide="download" size="14"></i> 
                 </button>
                 <button class="btn-small" onclick="document.getElementById('importInput').click()" title="Import ZIP">
                     <i data-lucide="upload" size="14"></i> Import
-                </button>
+                </button> -->
                 <input type="file" id="importInput" accept=".zip" style="display: none;" onchange="handleImport(event)">
             </div>
 
@@ -50,7 +75,8 @@
 
             <div class="file-section">
                 <div id="fileTree" class="file-tree"></div>
-                <button class="save-workspace-btn" onclick="saveWorkspace()" title="Choose a folder to save and automatically sync your workspace">
+                <button class="save-workspace-btn" onclick="saveWorkspace()"
+                    title="Choose a folder to save and automatically sync your workspace">
                     <span>Save Workspace</span>
                 </button>
             </div>
