@@ -88,29 +88,30 @@
 }
 
 .logo-text {
-	display: flex;
-	flex-direction: column;
+    display: flex;
+    flex-direction: column;
+    margin-top: 9px;
 }
 
 .logo-text h1 {
-	margin: 0;
-	font-size: 20px;
-	font-weight: 900;
-	line-height: 1;
+    margin: 0;
+    font-size: 20px;
+    font-weight: 800;
+    line-height: 1;
 
-	color: var(--accent-color);
-	letter-spacing: -0.5px;
+    color: var(--accent-color);
+    letter-spacing: -0.5px;
 }
 
 .logo-text h1 span {
-	color: var(--text-secondary);
+    color: var(--text-secondary);
 }
 
 .logo-text p {
-	margin-top: 4px;
+    font-size: 10px;
+    color: var(--text-secondary);
 
-	font-size: 14px;
-	color: var(--text-secondary);
-
-	font-weight: 500;
+    font-weight: 300;
 }
+
+
