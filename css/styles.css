@@ -133,9 +133,21 @@ body {
 		color var(--transition);
 }
 
+.landing-page {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 100vh;
+	width: 100vw;
+	background: var(--bg-primary);
+	color: var(--text-primary);
+	transition:
+		background var(--transition),
+		color var(--transition);
+}
 /* Layout */
 .app {
-	display: flex;
+	display: none;
 	height: 100vh;
 	width: 100vw;
 }
@@ -713,7 +725,7 @@ textarea {
 	font-weight: 600;
 	cursor: pointer;
 
-	transition: all 0.2s ease;
+	/* transition: all 0.2s ease; */
 }
 
 .save-workspace-btn:hover {
@@ -760,8 +772,8 @@ textarea {
 
 
 .logo {
-	width: 75px;
-	height: 80px;
+	width: 45px;
+	height: 50px;
 	object-fit: contain;
 	flex-shrink: 0;
 	transition: .3s ease;
@@ -771,7 +783,7 @@ textarea {
 	transform: scale(1.05) rotate(-2deg);
 }
 
-.logo-text {
+/* .logo-text {
 	display: flex;
 	flex-direction: column;
 }
@@ -797,4 +809,4 @@ textarea {
 	color: var(--text-secondary);
 
 	font-weight: 500;
-}
+} */
