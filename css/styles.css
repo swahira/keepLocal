@@ -195,7 +195,7 @@ body {
 	gap: 12px;
 }
 
-.btn {
+/* .btn {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -217,9 +217,9 @@ body {
 	background: var(--bg-tertiary);
 	transform: translateY(-2px);
 	box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
+} */
 
-.btn:active {
+/* .btn:active {
 	transform: translateY(0);
 }
 
@@ -231,7 +231,7 @@ body {
 
 .btn.primary:hover {
 	background: linear-gradient(135deg, var(--accent-hover), #10b981);
-}
+} */
 
 /* Search */
 .search {
@@ -569,10 +569,10 @@ textarea {
 .secondary-toolbar {
 	padding: 0 16px 12px;
 	gap: 8px;
-	justify-content: flex-start;
+	/* justify-content: flex-start; */
 }
 
-.btn-small {
+/* .btn-small {
 	display: flex;
 	align-items: center;
 	gap: 4px;
@@ -593,7 +593,7 @@ textarea {
 	background: var(--bg-tertiary);
 	color: var(--text-primary);
 	border-color: var(--text-muted);
-}
+} */
 
 /* Modals */
 .modal-message {
