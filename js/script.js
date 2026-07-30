@@ -8,6 +8,44 @@ document.addEventListener("DOMContentLoaded", async () => {
 	let importIdCounter = 0;
 	let workspaceHandle = null;
 
+
+	// File System Access API Support
+	const supportsFileSystemAccess =
+		"showDirectoryPicker" in window &&
+		"showOpenFilePicker" in window;
+
+	const isFirefox = navigator.userAgent.toLowerCase().includes("firefox");
+	const isSafari =
+		/^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+	function isSupportedBrowser() {
+		return supportsFileSystemAccess;
+	}
+
+	function initializeWorkspaceButton() {
+
+		const button = document.getElementById("saveWorkspaceBtn");
+		const message = document.getElementById("browserSupportMessage");
+
+		if (!button) return;
+
+		if (!supportsFileSystemAccess) {
+
+			// button.disabled = true;
+			// button.classList.add("disabled");
+
+			button.title =
+				"Workspace feature requires a Chromium-based browser.";
+
+			if (message) {
+				message.classList.remove("hidden");
+			}
+
+		}
+
+	}
+
+	// feature implimentation are started her 
 	function generateImportId(type) {
 		importIdCounter++;
 		const prefix = type === "folder" ? "d_" : "f_";
@@ -175,19 +213,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	let modalCallback = null;
 
-	function showInputModal(title, defaultValue, callback) {
-		modalTitle.textContent = title;
-		modalInput.value = defaultValue;
-		modalInput.classList.remove("hidden");
-		modalMessage.classList.add("hidden");
-		modalInputHint.classList.remove("hidden");
-		modalConfirmButtons.classList.add("hidden");
+	// function showInputModal(title, defaultValue, callback) {
+	// 	modalTitle.textContent = title;
+	// 	modalInput.value = defaultValue;
+	// 	modalInput.classList.remove("hidden");
+	// 	modalMessage.classList.add("hidden");
+	// 	modalInputHint.classList.remove("hidden");
+	// 	modalConfirmButtons.classList.add("hidden");
 
-		modalOverlay.classList.add("active");
-		modalInput.focus();
-		modalInput.select();
-		modalCallback = callback;
-	}
+	// 	modalOverlay.classList.add("active");
+	// 	modalInput.focus();
+	// 	modalInput.select();
+	// 	modalCallback = callback;
+	// }
 
 	function showConfirmModal(title, message, callback) {
 		modalTitle.textContent = title;
@@ -207,9 +245,45 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalCallback = callback;
 	}
 
+	function showInfoModal(title, message) {
+		modalTitle.textContent = title;
+		modalMessage.textContent = message;
+
+		modalInput.classList.add("hidden");
+		modalMessage.classList.remove("hidden");
+		modalInputHint.classList.add("hidden");
+		modalConfirmButtons.classList.remove("hidden");
+
+		// Hide the Cancel button
+		modalCancelBtn.style.display = "none";
+
+		// Show only the OK button
+		modalConfirmBtn.style.display = "inline-flex";
+		modalConfirmBtn.textContent = "OK";
+
+		modalOverlay.classList.add("active");
+
+		modalCallback = null;
+
+		modalConfirmBtn.onclick = () => {
+			hideModal();
+		};
+	}
+
 	function hideModal() {
 		modalOverlay.classList.remove("active");
 		modalInput.blur();
+
+		// Restore default state for confirmation dialogs
+		modalCancelBtn.style.display = "";
+		modalConfirmBtn.style.display = "inline-flex";
+		modalConfirmBtn.textContent = "Confirm";
+
+		modalConfirmBtn.onclick = () => {
+			if (modalCallback) modalCallback(true);
+			hideModal();
+		};
+
 		modalCallback = null;
 	}
 
@@ -778,17 +852,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 	editor.addEventListener("scroll", () => {
 		lineNumbers.scrollTop = editor.scrollTop;
 	});
+
+
 	// workspace save code--
 	// save one file
 	async function writeFile(directoryHandle, fileName, content) {
+
+		if (!isSupportedBrowser()) return;
+
 		const fileHandle = await directoryHandle.getFileHandle(fileName, {
-			create: true,
+			create: true
 		});
 
 		const writable = await fileHandle.createWritable();
+
 		await writable.write(content);
+
 		await writable.close();
+
 	}
+
+
 	// Recursively save folders and files
 	async function saveNodes(directoryHandle, nodes) {
 		for (const node of nodes) {
@@ -805,27 +889,59 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	async function syncWorkspace() {
+
+		if (!isSupportedBrowser()) return;
+
 		if (!workspaceHandle) return;
 
-		// Remove everything from the selected folder
-		// for await (const [name] of workspaceHandle.entries()) {
-		// 	await workspaceHandle.removeEntry(name, {
-		// 		recursive: true
-		// 	});
-		// }
-
-		// Recreate the workspace
 		await saveNodes(workspaceHandle, files);
+
 	}
 
 	window.saveWorkspace = async function () {
 
+		if (!supportsFileSystemAccess) {
+
+			let browser = "your browser";
+
+			if (isFirefox) {
+				browser = "Firefox";
+			} else if (isSafari) {
+				browser = "Safari";
+			}
+
+			showInfoModal(
+				"Workspace Not Supported",
+				`The Save Workspace feature is not supported in ${browser}.
+
+Please use a Chromium-based browser such as:
+
+• Google Chrome
+• Microsoft Edge
+• Brave
+• Opera
+• Arc
+
+to access local folders and automatically sync your workspace.`,
+				() => { }
+			);
+
+			return;
+		}
+
 		try {
+
 			workspaceHandle = await window.showDirectoryPicker({
 				mode: "readwrite"
 			});
+
 			await syncWorkspace();
-			alert("Workspace connected!");
+
+			showInfoModal(
+				"Workspace Connected",
+				"Your workspace has been connected successfully."
+			);
+
 		} catch (err) {
 
 			if (err.name !== "AbortError") {
@@ -834,11 +950,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		}
 
-	}
+	};
 	// --- Init ---
 	loadData();
 	render();
 	loadFile();
+	initializeWorkspaceButton();
 
 	// Click on file tree container (empty space) to deselect
 	fileTreeContainer.addEventListener("click", (e) => {
