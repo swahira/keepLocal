@@ -1,6 +1,7 @@
 document.addEventListener("DOMContentLoaded", async () => {
 	// --- State ---
 	let files = [];
+	let openFiles = [];
 	let selectedId = null;
 	let theme = "light";
 	let fontSize = 15;
@@ -23,26 +24,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function initializeWorkspaceButton() {
-
 		const button = document.getElementById("saveWorkspaceBtn");
 		const message = document.getElementById("browserSupportMessage");
 
 		if (!button) return;
 
 		if (!supportsFileSystemAccess) {
-
-			// button.disabled = true;
-			// button.classList.add("disabled");
-
+			button.disabled = true;
+			button.classList.add("disabled");
 			button.title =
-				"Workspace feature requires a Chromium-based browser.";
+				"Save Workspace is only available in Chromium-based browsers.";
 
 			if (message) {
 				message.classList.remove("hidden");
 			}
-
 		}
-
 	}
 
 	// feature implimentation are started her 
@@ -176,6 +172,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 		return null;
 	}
 
+	function addToOpenFiles(fileId) {
+		// Remove it if it's already in the list
+		openFiles = openFiles.filter(id => id !== fileId);
+
+		// Add it to the beginning
+		openFiles.unshift(fileId);
+
+		// Keep only the last 4 open files
+		if (openFiles.length > 4) {
+			openFiles.pop();
+		}
+	}
+
 	function nameExistsInArray(array, name, excludeId = null) {
 		return array.some(node => node.id !== excludeId && node.name.toLowerCase() === name.toLowerCase());
 	}
@@ -213,19 +222,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	let modalCallback = null;
 
-	// function showInputModal(title, defaultValue, callback) {
-	// 	modalTitle.textContent = title;
-	// 	modalInput.value = defaultValue;
-	// 	modalInput.classList.remove("hidden");
-	// 	modalMessage.classList.add("hidden");
-	// 	modalInputHint.classList.remove("hidden");
-	// 	modalConfirmButtons.classList.add("hidden");
+	function showInputModal(title, defaultValue, callback) {
+		modalTitle.textContent = title;
+		modalInput.value = defaultValue;
+		modalInput.classList.remove("hidden");
+		modalMessage.classList.add("hidden");
+		modalInputHint.classList.remove("hidden");
+		modalConfirmButtons.classList.add("hidden");
 
-	// 	modalOverlay.classList.add("active");
-	// 	modalInput.focus();
-	// 	modalInput.select();
-	// 	modalCallback = callback;
-	// }
+		modalOverlay.classList.add("active");
+		modalInput.focus();
+		modalInput.select();
+		modalCallback = callback;
+	}
 
 	function showConfirmModal(title, message, callback) {
 		modalTitle.textContent = title;
@@ -245,19 +254,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalCallback = callback;
 	}
 
-	function showInfoModal(title, message) {
+	function showInfoModal(title, message = "") {
 		modalTitle.textContent = title;
-		modalMessage.textContent = message;
+
+		if (message) {
+			modalMessage.textContent = message;
+			modalMessage.classList.remove("hidden");
+		} else {
+			modalMessage.classList.add("hidden");
+		}
 
 		modalInput.classList.add("hidden");
-		modalMessage.classList.remove("hidden");
 		modalInputHint.classList.add("hidden");
 		modalConfirmButtons.classList.remove("hidden");
 
-		// Hide the Cancel button
 		modalCancelBtn.style.display = "none";
-
-		// Show only the OK button
 		modalConfirmBtn.style.display = "inline-flex";
 		modalConfirmBtn.textContent = "OK";
 
@@ -614,15 +625,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// --- Rendering ---
 	function renderTree(nodes, container, depth = 0) {
 		nodes.forEach((node) => {
-			// When searching, we only show files that match OR folders that have matching children
 			let shouldShow = true;
 			let hasMatchingChild = false;
 
 			if (searchQuery) {
 				if (node.type === "file") {
-					shouldShow = node.name.toLowerCase().includes(searchQuery) || (node.content && node.content.toLowerCase().includes(searchQuery));
+					shouldShow =
+						node.name.toLowerCase().includes(searchQuery) ||
+						(node.content &&
+							node.content.toLowerCase().includes(searchQuery));
 				} else {
-					// Check if any child matches (recursively)
 					hasMatchingChild = checkHasMatchingChild(node, searchQuery);
 					shouldShow = hasMatchingChild;
 				}
@@ -633,11 +645,122 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const item = document.createElement("div");
 			item.className = "file-item";
 			item.draggable = true;
-			item.title = `${node.type === "folder" ? "📁 Folder" : "📄 File"}: ${node.name}`;
-			if (node.id === selectedId) item.classList.add("active");
-			item.style.paddingLeft = 16 + depth * 16 + "px";
 
-			// Drag Events
+			if (node.id === selectedId) {
+				item.classList.add("active");
+			}
+
+			item.style.paddingLeft = `${16 + depth * 16}px`;
+
+			/* ---------------- Arrow ---------------- */
+
+			if (node.type === "folder") {
+
+				const arrow = document.createElement("img");
+				arrow.className = "tree-arrow";
+				arrow.src = "assets/icons/icon_big.svg"; // Change this path if needed
+				arrow.alt = "Expand";
+				arrow.draggable = false;
+
+				if (node.isOpen || (searchQuery && hasMatchingChild)) {
+					arrow.classList.add("expanded");
+				}
+
+				arrow.onclick = (e) => {
+					e.stopPropagation();
+
+					node.isOpen = !node.isOpen;
+
+					saveData();
+					render();
+				};
+
+				item.appendChild(arrow);
+
+			} else {
+
+				// Invisible placeholder so files align with folders
+				const placeholder = document.createElement("div");
+				placeholder.className = "tree-arrow placeholder";
+
+				item.appendChild(placeholder);
+
+			}
+
+			/* ---------------- Icon ---------------- */
+
+			const icon = document.createElement("span");
+			icon.className = "icon";
+
+			const iconName =
+				node.type === "folder"
+					? node.isOpen || (searchQuery && hasMatchingChild)
+						? "folder-open"
+						: "folder"
+					: "file-text";
+
+			icon.innerHTML = `<i data-lucide="${iconName}" size="16"></i>`;
+
+			item.appendChild(icon);
+
+			/* ---------------- Name ---------------- */
+
+			const nameSpan = document.createElement("span");
+			nameSpan.className = "file-name";
+			nameSpan.textContent = node.name;
+
+			item.appendChild(nameSpan);
+
+			/* ---------------- Actions ---------------- */
+
+			const actions = document.createElement("div");
+			actions.className = "actions";
+
+			actions.innerHTML = `
+			<span class="action-btn"
+				onclick="event.stopPropagation(); renameNode('${node.id}')">
+				<i data-lucide="edit-3" size="14"></i>
+			</span>
+
+			<span class="action-btn"
+				onclick="event.stopPropagation(); deleteNode('${node.id}')">
+				<i data-lucide="trash-2" size="14"></i>
+			</span>
+		`;
+
+			item.appendChild(actions);
+
+			/* ---------------- Click ---------------- */
+
+			item.onclick = () => {
+				selectedId = node.id;
+
+				if (node.type === "file") {
+					addToOpenFiles(node.id);
+					loadFile();
+				}
+
+				saveData();
+				render();
+			};
+
+			/* ---------------- Context Menu ---------------- */
+
+			item.oncontextmenu = (e) => {
+				if (node.type !== "folder") return;
+
+				e.preventDefault();
+
+				contextNodeId = node.id;
+
+				contextMenu.style.left = e.pageX + "px";
+				contextMenu.style.top = e.pageY + "px";
+
+				contextMenu.classList.remove("hidden");
+			};
+
+			/* ---------------- Drag & Drop ---------------- */
+
 			item.ondragstart = (e) => {
 				draggedId = node.id;
 				item.classList.add("dragging");
@@ -651,9 +774,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			item.ondragover = (e) => {
 				e.preventDefault();
-				if (draggedId !== node.id) {
-					item.classList.add("drag-over");
-				}
+				item.classList.add("drag-over");
 			};
 
 			item.ondragleave = () => {
@@ -663,70 +784,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 			item.ondrop = (e) => {
 				e.preventDefault();
 				e.stopPropagation();
+
 				item.classList.remove("drag-over");
+
 				if (draggedId) {
 					moveNode(draggedId, node.id);
 				}
 			};
 
-			const icon = document.createElement("span");
-			icon.className = "icon";
-			let iconName =
-				node.type === "folder"
-					? node.isOpen || (searchQuery && hasMatchingChild)
-						? "folder-open"
-						: "folder"
-					: "file-text";
-			icon.innerHTML = `<i data-lucide="${iconName}" size="16"></i>`;
-			icon.title = node.type === "folder" ? "Folder" : "File";
-			item.appendChild(icon);
-
-			const nameSpan = document.createElement("span");
-			nameSpan.textContent = node.name;
-			nameSpan.title = `${node.type === "folder" ? "📁 Folder" : "📄 File"}: ${node.name}`;
-			item.appendChild(nameSpan);
-
-			const actions = document.createElement("div");
-			actions.className = "actions";
-			actions.innerHTML = `
-                <span class="action-btn" title="Rename ${node.type === "folder" ? "folder" : "file"}" onclick="event.stopPropagation(); renameNode('${node.id}')"><i data-lucide="edit-3" size="14"></i></span>
-                <span class="action-btn" title="Delete ${node.type === "folder" ? "folder" : "file"}" onclick="event.stopPropagation(); deleteNode('${node.id}')"><i data-lucide="trash-2" size="14"></i></span>
-            `;
-			item.appendChild(actions);
-
-			item.onclick = () => {
-				selectedId = node.id;
-				if (node.type === "folder") {
-					node.isOpen = !node.isOpen;
-				} else {
-					loadFile();
-				}
-				saveData();
-				render();
-			};
-
-			item.oncontextmenu = (e) => {
-				if (node.type === "folder") {
-					e.preventDefault();
-					contextNodeId = node.id;
-					const menuWidth = 180;
-					const menuHeight = 50;
-					let top = e.pageY;
-					let left = e.pageX;
-					if (top + menuHeight > window.innerHeight) top = window.innerHeight - menuHeight;
-					if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth;
-					contextMenu.style.top = top + "px";
-					contextMenu.style.left = left + "px";
-					contextMenu.classList.remove("hidden");
-				}
-			};
-
 			container.appendChild(item);
 
-			if (node.children && (node.isOpen || (searchQuery && hasMatchingChild))) {
+			if (
+				node.children &&
+				(node.isOpen || (searchQuery && hasMatchingChild))
+			) {
 				renderTree(node.children, container, depth + 1);
 			}
 		});
+
+		if (window.lucide) {
+			lucide.createIcons();
+		}
 	}
 
 	function checkHasMatchingChild(folder, query) {
@@ -817,6 +895,52 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	function render() {
 		fileTreeContainer.innerHTML = "";
+		//open files
+		if (openFiles.length > 0) {
+
+			const heading = document.createElement("div");
+			heading.className = "section-heading";
+			heading.textContent = "OPEN FILES";
+
+			fileTreeContainer.appendChild(heading);
+
+			openFiles.forEach(id => {
+
+				const file = findNode(files, id);
+
+				if (!file || file.type !== "file") return;
+
+				const item = document.createElement("div");
+
+				item.className = "file-item open-file";
+
+				if (id === selectedId)
+					item.classList.add("active");
+
+				item.innerHTML = `
+                <span class="icon">
+                    <i data-lucide="file-text" size="16"></i>
+                </span>
+
+                <span>${file.name}</span>
+            `;
+
+				item.onclick = () => {
+					selectedId = id;
+					loadFile();
+					saveData();
+					render();
+				};
+
+				fileTreeContainer.appendChild(item);
+
+			});
+
+			const divider = document.createElement("div");
+			divider.className = "section-divider";
+
+			fileTreeContainer.appendChild(divider);
+		}
 		renderTree(files, fileTreeContainer);
 		updateBreadcrumbs();
 		if (window.lucide) lucide.createIcons();
@@ -938,8 +1062,7 @@ to access local folders and automatically sync your workspace.`,
 			await syncWorkspace();
 
 			showInfoModal(
-				"Workspace Connected",
-				"Your workspace has been connected successfully."
+				"Workspace Connected Successfully",
 			);
 
 		} catch (err) {
@@ -1021,6 +1144,17 @@ to access local folders and automatically sync your workspace.`,
 			);
 			config.sidebarWidth = sidebarWidth;
 			localStorage.setItem("localKeep_config", JSON.stringify(config));
+		}
+	});
+
+	document.addEventListener("keydown", (e) => {
+		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+			e.preventDefault();
+
+			const saveBtn = document.getElementById("saveWorkspaceBtn");
+			if (saveBtn) {
+				saveBtn.click();
+			}
 		}
 	});
 });

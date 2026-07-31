@@ -115,13 +115,21 @@
                 </div>
             </div>
 
+
             <div class="file-section">
                 <div id="fileTree" class="file-tree"></div>
-                <button id="saveWorkspaceBtn" class="save-workspace-btn" onclick="saveWorkspace()"
-                    title="Choose a folder to save and automatically sync your workspace">
-                    <span>Save Workspace</span>
-                </button>
             </div>
+
+            <div class="workspace-footer">
+                <button id="saveWorkspaceBtn" class="save-workspace-btn" onclick="saveWorkspace()"
+                    title="Choose a folder to save and automatically sync your workspace(Ctrl + S)">
+                    Save Workspace
+                </button>
+                <p id="browserSupportMessage" class="browser-support-message hidden">
+                    ⚠ Workspace Sync requires a Chromium-based browser.
+                </p>
+            </div>
+
         </div>
 
         <!-- Resize Handle -->

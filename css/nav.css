@@ -136,7 +136,7 @@
 .logo-text {
     display: flex;
     flex-direction: column;
-    margin-top: 9px;
+    margin-top: 2px;
 }
 
 .logo-text h1 {
