@@ -30,6 +30,9 @@
 	--shadow-md: 0 4px 16px rgba(0, 0, 0, 0.10);
 	--danger: #EF4444;
 	--danger-hover: #DC2626;
+
+	--editor-font-size: 13px;
+	--editor-line-height: 1.65;
 }
 
 [data-theme="dark"] {
@@ -53,6 +56,9 @@
 	--shadow-md: 0 6px 24px rgba(0, 0, 0, 0.40);
 	--danger: #F87171;
 	--danger-hover: #EF4444;
+
+	--editor-font-size: 13px;
+	--editor-line-height: 1.65;
 }
 
 /* ============================================================
@@ -866,13 +872,15 @@ button {
 	text-align: right;
 	padding: 12px 6px 0 0;
 	font-family: "JetBrains Mono", monospace;
+	font-size: var(--editor-font-size);
+	line-height: 1.5385;
 	user-select: none;
 	overflow: hidden;
 }
 
 .line-numbers div {
-	height: 20px;
-	line-height: 20px;
+	height: calc(var(--editor-font-size) * 1.5385);
+	line-height: calc(var(--editor-font-size) * 1.5385);
 }
 
 .code-editor-area {
@@ -887,9 +895,9 @@ button {
 	inset: 0;
 	margin: 0;
 	padding: 12px 16px;
-	font-size: 13px;
+	font-size: var(--editor-font-size);
 	font-family: "JetBrains Mono", "Fira Code", monospace;
-	line-height: 20px;
+	line-height: 1.5385;
 	white-space: pre;
 	word-wrap: normal;
 	overflow: hidden;
@@ -905,9 +913,9 @@ button {
 	inset: 0;
 	margin: 0;
 	padding: 12px 16px;
-	font-size: 13px;
+	font-size: var(--editor-font-size);
 	font-family: "JetBrains Mono", "Fira Code", monospace;
-	line-height: 20px;
+	line-height: 1.5385;
 	white-space: pre;
 	word-wrap: normal;
 	overflow: auto;
@@ -1011,9 +1019,52 @@ button {
 }
 
 .ce-paragraph {
-	font-size: 15px;
-	line-height: 1.65;
-	color: var(--text-primary);
+    font-size: var(--editor-font-size) !important;
+    line-height: var(--editor-line-height);
+    color: var(--text-primary);
+}
+
+/* Editor.js blocks follow the selected editor font size */
+.editorjs-wrapper {
+    font-size: var(--editor-font-size);
+}
+
+.editorjs-wrapper .ce-block,
+.editorjs-wrapper .ce-block__content,
+.editorjs-wrapper .cdx-block {
+    font-size: var(--editor-font-size) !important;
+}
+
+/* Code blocks */
+.editorjs-wrapper .ce-code__textarea,
+.editorjs-wrapper .ce-rawtool__textarea,
+.editorjs-wrapper .ce-rawinput {
+    font-size: var(--editor-font-size) !important;
+    line-height: 1.5385;
+}
+
+/* Quotes */
+.editorjs-wrapper .cdx-quote {
+    font-size: var(--editor-font-size);
+}
+
+/* Lists */
+.editorjs-wrapper .cdx-list {
+    font-size: var(--editor-font-size);
+}
+
+/* Checklists */
+.editorjs-wrapper .cdx-checklist {
+    font-size: var(--editor-font-size);
+}
+
+/* Tables */
+.editorjs-wrapper .tc-table {
+    font-size: var(--editor-font-size);
+}
+
+.editorjs-wrapper .tc-cell {
+    font-size: var(--editor-font-size);
 }
 
 .editorjs-wrapper a {
@@ -1101,10 +1152,10 @@ button {
 }
 
 .tc-table {
-	border-color: var(--border-color) !important;
-	background: var(--bg-secondary) !important;
-	border-radius: var(--radius);
-	font-size: 12.5px;
+    border-color: var(--border-color) !important;
+    background: var(--bg-secondary) !important;
+    border-radius: var(--radius);
+    font-size: var(--editor-font-size) !important;
 }
 
 .tc-row {
@@ -1124,11 +1175,11 @@ button {
 }
 
 .tc-cell {
-	border-right: 1px solid var(--border-color) !important;
-	padding: 8px 12px !important;
-	color: var(--text-primary) !important;
-	font-size: 13px;
-	outline: none !important;
+    border-right: 1px solid var(--border-color) !important;
+    padding: 8px 12px !important;
+    color: var(--text-primary) !important;
+    font-size: var(--editor-font-size) !important;
+    outline: none !important;
 }
 
 .tc-cell:focus {
@@ -1165,6 +1216,33 @@ button {
 	background: rgba(239, 68, 68, 0.12) !important;
 }
 
+.editorjs-wrapper .ce-header {
+    font-size: calc(var(--editor-font-size) * 1.8);
+}
+
+.editorjs-wrapper h1.ce-header {
+    font-size: calc(var(--editor-font-size) * 2.2);
+}
+
+.editorjs-wrapper h2.ce-header {
+    font-size: calc(var(--editor-font-size) * 1.9);
+}
+
+.editorjs-wrapper h3.ce-header {
+    font-size: calc(var(--editor-font-size) * 1.6);
+}
+
+.editorjs-wrapper h4.ce-header {
+    font-size: calc(var(--editor-font-size) * 1.4);
+}
+
+.editorjs-wrapper h5.ce-header {
+    font-size: calc(var(--editor-font-size) * 1.2);
+}
+
+.editorjs-wrapper h6.ce-header {
+    font-size: var(--editor-font-size);
+}
 /* ============================================================
    STATUS BAR
    ============================================================ */
@@ -1394,10 +1472,6 @@ button {
 		opacity: 1;
 		transform: none;
 	}
-}
-
-.file-item {
-	/* Smooth transitions without layout flash */
 }
 
 /* File type color coding */
@@ -1793,4 +1867,3 @@ button {
 .workspaces-empty small {
 	font-size: 13px;
 }
-

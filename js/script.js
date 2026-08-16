@@ -7,49 +7,49 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// GLOBAL STATE
 	// ============================================================
-	let workspaces        = [];    // [{id, name, createdAt, lastOpenedAt, folderName, fileCount}]
-	let openTabs          = [];    // [fileId1, fileId2, ...] open tab IDs
-	let isWordWrap        = false; // word wrap toggle
-	let activeWsId        = null;  // currently open workspace id
-	let files             = [];    // files for active workspace
-	let selectedId        = null;
-	let theme             = "dark";
-	let fontSize          = 13;
-	let searchQuery       = "";
-	let importIdCounter   = 0;
-	let workspaceHandle   = null;  // FileSystemDirectoryHandle
-	let editorMode        = "block";
-	let editorInstance    = null;
-	let isInitEditor      = false;
-	let editorSaveTimer   = null;
-	let draggedId         = null;
-	let inlineRenameId    = null;
+	let workspaces = [];    // [{id, name, createdAt, lastOpenedAt, folderName, fileCount}]
+	let openTabs = [];    // [fileId1, fileId2, ...] open tab IDs
+	let isWordWrap = false; // word wrap toggle
+	let activeWsId = null;  // currently open workspace id
+	let files = [];    // files for active workspace
+	let selectedId = null;
+	let theme = "dark";
+	let fontSize = 13;
+	let searchQuery = "";
+	let importIdCounter = 0;
+	let workspaceHandle = null;  // FileSystemDirectoryHandle
+	let editorMode = "block";
+	let editorInstance = null;
+	let isInitEditor = false;
+	let editorSaveTimer = null;
+	let draggedId = null;
+	let inlineRenameId = null;
 
 	// ============================================================
 	// DOM REFS
 	// ============================================================
-	const welcomeScreen     = document.getElementById("welcomeScreen");
-	const appShell          = document.getElementById("appShell");
-	const tabsListEl        = document.getElementById("tabsList");
-	const workspacesList    = document.getElementById("workspacesList");
-	const workspacesEmpty   = document.getElementById("workspacesEmpty");
-	const wsCountBadge      = document.getElementById("wsCountBadge");
-	const sidebarWsName     = document.getElementById("sidebarWsName");
-	const workspacePathLabel= document.getElementById("workspacePathLabel");
-	const wsSyncBtn         = document.getElementById("wsSyncBtn");
-	const wsStatusBadge     = document.getElementById("wsStatusBadge");
-	const saveWorkspaceBtn  = document.getElementById("saveWorkspaceBtn");
+	const welcomeScreen = document.getElementById("welcomeScreen");
+	const appShell = document.getElementById("appShell");
+	const tabsListEl = document.getElementById("tabsList");
+	const workspacesList = document.getElementById("workspacesList");
+	const workspacesEmpty = document.getElementById("workspacesEmpty");
+	const wsCountBadge = document.getElementById("wsCountBadge");
+	const sidebarWsName = document.getElementById("sidebarWsName");
+	const workspacePathLabel = document.getElementById("workspacePathLabel");
+	const wsSyncBtn = document.getElementById("wsSyncBtn");
+	const wsStatusBadge = document.getElementById("wsStatusBadge");
+	const saveWorkspaceBtn = document.getElementById("saveWorkspaceBtn");
 	const browserSupportMsg = document.getElementById("browserSupportMessage");
-	const fileTreeEl        = document.getElementById("fileTree");
-	const breadcrumbEl      = document.getElementById("breadcrumb");
-	const cursorPosSpan     = document.getElementById("cursorPos");
-	const editorStatusSpan  = document.getElementById("editorStatus");
-	const editorjsWrapper   = document.getElementById("editorjs");
-	const plainWrapper      = document.getElementById("plainEditorWrapper");
-	const lineNumbersEl     = document.getElementById("lineNumbers");
-	const editorTextarea    = document.getElementById("editor");
-	const modeBlockBtn      = document.getElementById("modeBlockBtn");
-	const modePlainBtn      = document.getElementById("modePlainBtn");
+	const fileTreeEl = document.getElementById("fileTree");
+	const breadcrumbEl = document.getElementById("breadcrumb");
+	const cursorPosSpan = document.getElementById("cursorPos");
+	const editorStatusSpan = document.getElementById("editorStatus");
+	const editorjsWrapper = document.getElementById("editorjs");
+	const plainWrapper = document.getElementById("plainEditorWrapper");
+	const lineNumbersEl = document.getElementById("lineNumbers");
+	const editorTextarea = document.getElementById("editor");
+	const modeBlockBtn = document.getElementById("modeBlockBtn");
+	const modePlainBtn = document.getElementById("modePlainBtn");
 
 	// ============================================================
 	// FEATURE DETECTION
@@ -59,7 +59,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// INDEXEDDB — persist folder handles
 	// ============================================================
-	const IDB_NAME  = "keeplocal_db";
+	const IDB_NAME = "keeplocal_db";
 	const IDB_STORE = "handles";
 
 	function idbOpen() {
@@ -67,7 +67,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const r = indexedDB.open(IDB_NAME, 1);
 			r.onupgradeneeded = e => e.target.result.createObjectStore(IDB_STORE);
 			r.onsuccess = e => res(e.target.result);
-			r.onerror   = () => rej(r.error);
+			r.onerror = () => rej(r.error);
 		});
 	}
 	async function idbSet(key, val) {
@@ -82,10 +82,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 		try {
 			const db = await idbOpen();
 			return new Promise((res, rej) => {
-				const tx  = db.transaction(IDB_STORE, "readonly");
+				const tx = db.transaction(IDB_STORE, "readonly");
 				const req = tx.objectStore(IDB_STORE).get(key);
 				req.onsuccess = () => res(req.result);
-				req.onerror   = () => rej(req.error);
+				req.onerror = () => rej(req.error);
 			});
 		} catch { return null; }
 	}
@@ -136,11 +136,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const raw = localStorage.getItem(`keeplocal_cfg_${wsId}`);
 		if (raw) {
 			const c = JSON.parse(raw);
-			theme      = c.theme      || "dark";
-			fontSize   = c.fontSize   || 15;
+			theme = c.theme || "dark";
+			fontSize = Number.isFinite(Number(c.fontSize))
+				? Number(c.fontSize)
+				: 13;
 			selectedId = c.selectedId || null;
 			editorMode = c.editorMode || "block";
-			openTabs   = Array.isArray(c.openTabs) ? c.openTabs : [];
+			openTabs = Array.isArray(c.openTabs) ? c.openTabs : [];
 			isWordWrap = !!c.isWordWrap;
 			if (c.sidebarWidth) {
 				document.documentElement.style.setProperty("--sidebar-width", c.sidebarWidth + "px");
@@ -234,16 +236,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function escHtml(str) {
-		return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+		return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 	}
 
 	function timeAgo(ts) {
 		if (!ts) return "Never opened";
 		const s = Math.floor((Date.now() - ts) / 1000);
-		if (s < 60)   return "Just now";
-		if (s < 3600) return `${Math.floor(s/60)}m ago`;
-		if (s < 86400)return `${Math.floor(s/3600)}h ago`;
-		if (s < 604800)return `${Math.floor(s/86400)}d ago`;
+		if (s < 60) return "Just now";
+		if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+		if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+		if (s < 604800) return `${Math.floor(s / 86400)}d ago`;
 		return new Date(ts).toLocaleDateString();
 	}
 
@@ -297,7 +299,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const item = document.createElement("div");
 			const isActive = ws.id === activeWsId;
 			item.className = `ws-dropdown-item${isActive ? " active" : ""}`;
-			
+
 			item.innerHTML = `
 				<i data-lucide="${ws.folderName ? 'folder' : 'layers'}" size="14" class="ws-item-icon"></i>
 				<span class="ws-item-name">${escHtml(ws.name)}</span>
@@ -422,8 +424,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 					if (zipEntry.dir) return;
 					promises.push((async () => {
 						const content = await zipEntry.async("string");
-						const parts   = relativePath.split("/");
-						const fname   = parts.pop();
+						const parts = relativePath.split("/");
+						const fname = parts.pop();
 						if (!fname) return;
 						let arr = files, curPath = "";
 						for (const dir of parts) {
@@ -553,7 +555,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		selectedId = null;
 		// Destroy editor instance to avoid memory leak
 		if (editorInstance) {
-			try { editorInstance.destroy(); } catch (_) {}
+			try { editorInstance.destroy(); } catch (_) { }
 			editorInstance = null;
 		}
 		showWelcome();
@@ -563,7 +565,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const f = findNode(files, selectedId);
 		if (!f || f.type !== "file") return;
 		if (editorMode === "block" && editorInstance) {
-			try { const d = await editorInstance.save(); f.content = blocksToText(d); } catch (_) {}
+			try { const d = await editorInstance.save(); f.content = blocksToText(d); } catch (_) { }
 		} else {
 			f.content = editorTextarea.value;
 		}
@@ -574,26 +576,101 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	function applyConfig() {
 		document.body.setAttribute("data-theme", theme);
-		// Update Prism.js theme link
+
 		const prismLink = document.getElementById("prismTheme");
+
 		if (prismLink) {
 			prismLink.href = theme === "dark"
 				? "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css"
 				: "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css";
 		}
-		const icon = document.querySelector("#themeToggle i") || document.querySelector("#themeToggle svg");
-		if (icon) {
-			if (icon.tagName.toLowerCase() === "i") {
-				icon.setAttribute("data-lucide", theme === "dark" ? "sun" : "moon");
-			} else {
-				const ni = document.createElement("i");
-				ni.setAttribute("data-lucide", theme === "dark" ? "sun" : "moon");
-				icon.replaceWith(ni);
+
+		const themeButton = document.getElementById("themeToggle");
+
+		if (themeButton) {
+			themeButton.innerHTML = `
+            <i data-lucide="${theme === "dark" ? "sun" : "moon"}" size="15"></i>
+        `;
+
+			if (window.lucide) {
+				lucide.createIcons();
 			}
-			if (window.lucide) lucide.createIcons();
 		}
-		if (editorTextarea) editorTextarea.style.fontSize = fontSize + "px";
-		if (lineNumbersEl) lineNumbersEl.style.fontSize = "";
+
+		// ============================================
+		// FONT SIZE
+		// ============================================
+
+		// Main editor font-size variable
+		document.documentElement.style.setProperty(
+			"--editor-font-size",
+			`${fontSize}px`
+		);
+
+		// Raw editor
+		if (editorTextarea) {
+			editorTextarea.style.fontSize = `${fontSize}px`;
+		}
+
+		// Line numbers
+		if (lineNumbersEl) {
+			lineNumbersEl.style.fontSize = `${fontSize}px`;
+		}
+
+		// Code highlighting
+		const codeHighlightPre =
+			document.getElementById("codeHighlightPre");
+
+		const codeHighlightContent =
+			document.getElementById("codeHighlightContent");
+
+		if (codeHighlightPre) {
+			codeHighlightPre.style.fontSize = `${fontSize}px`;
+		}
+
+		if (codeHighlightContent) {
+			codeHighlightContent.style.fontSize = `${fontSize}px`;
+		}
+
+		// Editor.js
+		if (editorjsWrapper) {
+			editorjsWrapper.style.setProperty(
+				"--editor-font-size",
+				`${fontSize}px`
+			);
+
+			editorjsWrapper.style.setProperty(
+				"font-size",
+				`${fontSize}px`,
+				"important"
+			);
+
+			// Editor.js creates these elements dynamically
+			editorjsWrapper
+				.querySelectorAll(
+					".ce-paragraph, .cdx-block, .ce-code__textarea, " +
+					".cdx-quote, .cdx-list, .cdx-checklist, .tc-cell"
+				)
+				.forEach(el => {
+					el.style.setProperty(
+						"font-size",
+						`${fontSize}px`,
+						"important"
+					);
+				});
+
+			// Headings
+			editorjsWrapper
+				.querySelectorAll(".ce-header")
+				.forEach(el => {
+					el.style.setProperty(
+						"font-size",
+						`${fontSize * 1.6}px`,
+						"important"
+					);
+				});
+		}
+
 		applyWordWrapUI();
 	}
 
@@ -709,19 +786,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// MODAL
 	// ============================================================
-	const modalOverlay      = document.getElementById("modalOverlay");
-	const modalTitle        = document.getElementById("modalTitle");
-	const modalInput        = document.getElementById("modalInput");
-	const modalMessage      = document.getElementById("modalMessage");
-	const modalInputHint    = document.getElementById("modalInputHint");
-	const modalConfirmBtns  = document.getElementById("modalConfirmButtons");
-	const modalConfirmBtn   = document.getElementById("modalConfirmBtn");
-	const modalCancelBtn    = document.getElementById("modalCancelBtn");
-	let   modalCb           = null;
+	const modalOverlay = document.getElementById("modalOverlay");
+	const modalTitle = document.getElementById("modalTitle");
+	const modalInput = document.getElementById("modalInput");
+	const modalMessage = document.getElementById("modalMessage");
+	const modalInputHint = document.getElementById("modalInputHint");
+	const modalConfirmBtns = document.getElementById("modalConfirmButtons");
+	const modalConfirmBtn = document.getElementById("modalConfirmBtn");
+	const modalCancelBtn = document.getElementById("modalCancelBtn");
+	let modalCb = null;
 
 	function showInputModal(title, def, cb) {
 		modalTitle.textContent = title;
-		modalInput.value       = def || "";
+		modalInput.value = def || "";
 		modalInput.classList.remove("hidden");
 		modalMessage.classList.add("hidden");
 		modalInputHint.classList.remove("hidden");
@@ -739,7 +816,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalInputHint.classList.add("hidden");
 		modalConfirmBtns.classList.remove("hidden");
 		modalConfirmBtn.textContent = danger ? "Delete" : "Confirm";
-		modalConfirmBtn.className   = danger ? "modal-btn danger" : "modal-btn primary";
+		modalConfirmBtn.className = danger ? "modal-btn danger" : "modal-btn primary";
 		modalOverlay.classList.add("active");
 		modalCb = cb;
 	}
@@ -761,7 +838,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (e.key === "Escape") hideModal();
 	});
 	modalConfirmBtn.onclick = () => { if (modalCb) modalCb(true); hideModal(); };
-	modalCancelBtn.onclick  = () => hideModal();
+	modalCancelBtn.onclick = () => hideModal();
 	modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) hideModal(); });
 
 	// ============================================================
@@ -817,9 +894,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	async function readDirectoryHandle(dirHandle) {
 		const SKIP = new Set(["node_modules", ".git", ".svn", "dist", "build", "__pycache__", ".next", ".cache"]);
-		const TEXT_EXTS = new Set(["txt","md","js","ts","jsx","tsx","html","css","json","yaml","yml",
-			"toml","xml","csv","sh","bash","py","rb","go","rs","java","c","cpp","h","php",
-			"vue","svelte","env","gitignore","dockerfile","sql","graphql","mdx","ini","cfg","conf","log"]);
+		const TEXT_EXTS = new Set(["txt", "md", "js", "ts", "jsx", "tsx", "html", "css", "json", "yaml", "yml",
+			"toml", "xml", "csv", "sh", "bash", "py", "rb", "go", "rs", "java", "c", "cpp", "h", "php",
+			"vue", "svelte", "env", "gitignore", "dockerfile", "sql", "graphql", "mdx", "ini", "cfg", "conf", "log"]);
 		const result = [];
 
 		async function readDir(handle, arr) {
@@ -853,7 +930,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	async function writeFile(dirHandle, name, content) {
 		const fh = await dirHandle.getFileHandle(name, { create: true });
-		const w  = await fh.createWritable();
+		const w = await fh.createWritable();
 		await w.write(content); await w.close();
 	}
 
@@ -955,7 +1032,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		} else {
 			const tgt = findNode(files, tgtId);
 			const arr = tgt.type === "folder" ? tgt.children : (findParent(files, tgtId)?.children || files);
-			const tp  = tgt.type === "folder" ? tgt : findParent(files, tgtId);
+			const tp = tgt.type === "folder" ? tgt : findParent(files, tgtId);
 			arr.push(src);
 			if (tp) tp.isOpen = true;
 		}
@@ -974,15 +1051,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	function beginInlineRename(id) {
 		inlineRenameId = id;
-		const el   = fileTreeEl.querySelector(`[data-id="${id}"]`);
+		const el = fileTreeEl.querySelector(`[data-id="${id}"]`);
 		const span = el?.querySelector(".item-name");
 		if (!el || !span) return;
 		const n = findNode(files, id);
 		if (!n) return;
 
 		const input = document.createElement("input");
-		input.type      = "text";
-		input.value     = n.name;
+		input.type = "text";
+		input.value = n.name;
 		input.className = "inline-rename-input";
 		span.replaceWith(input);
 		input.focus();
@@ -1035,7 +1112,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 	function downloadBlob(blob, name) {
 		const url = URL.createObjectURL(blob);
-		const a   = document.createElement("a");
+		const a = document.createElement("a");
 		a.href = url; a.download = name; a.click();
 		setTimeout(() => URL.revokeObjectURL(url), 1000);
 	}
@@ -1080,10 +1157,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// CONTEXT MENU
 	// ============================================================
 	const contextMenu = document.getElementById("contextMenu");
-	const ctxRename   = document.getElementById("ctxRename");
-	const ctxExport   = document.getElementById("ctxExport");
-	const ctxDelete   = document.getElementById("ctxDelete");
-	let   ctxNodeId   = null;
+	const ctxRename = document.getElementById("ctxRename");
+	const ctxExport = document.getElementById("ctxExport");
+	const ctxDelete = document.getElementById("ctxDelete");
+	let ctxNodeId = null;
 
 	window.addEventListener("click", () => contextMenu.classList.add("hidden"));
 	ctxRename.onclick = () => { if (ctxNodeId) renameNode(ctxNodeId); contextMenu.classList.add("hidden"); };
@@ -1133,10 +1210,23 @@ document.addEventListener("DOMContentLoaded", async () => {
 		applyConfig();
 		if (activeWsId) saveWsConfig(activeWsId);
 	};
-	window.changeFontSize = function (d) {
-		fontSize = Math.max(10, Math.min(30, fontSize + d));
+
+	window.changeFontSize = function (delta) {
+		const MIN_FONT_SIZE = 10;
+		const MAX_FONT_SIZE = 30;
+
+		fontSize = Math.max(
+			MIN_FONT_SIZE,
+			Math.min(MAX_FONT_SIZE, fontSize + delta)
+		);
+
 		applyConfig();
-		if (activeWsId) saveWsConfig(activeWsId);
+
+		if (activeWsId) {
+			saveWsConfig(activeWsId);
+		}
+
+		console.log("Editor font size:", fontSize);
 	};
 	window.toggleSearchBar = function () {
 		const wrapper = document.getElementById("searchBarWrapper");
@@ -1286,10 +1376,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			// Drag
 			el.ondragstart = (e) => { draggedId = node.id; el.classList.add("dragging"); e.dataTransfer.setData("text/plain", node.id); e.stopPropagation(); };
-			el.ondragend   = () => { el.classList.remove("dragging"); draggedId = null; };
-			el.ondragover  = (e) => { e.preventDefault(); if (draggedId !== node.id) el.classList.add("drag-over"); };
+			el.ondragend = () => { el.classList.remove("dragging"); draggedId = null; };
+			el.ondragover = (e) => { e.preventDefault(); if (draggedId !== node.id) el.classList.add("drag-over"); };
 			el.ondragleave = () => el.classList.remove("drag-over");
-			el.ondrop      = (e) => { e.preventDefault(); e.stopPropagation(); el.classList.remove("drag-over"); if (draggedId) moveNode(draggedId, node.id); };
+			el.ondrop = (e) => { e.preventDefault(); e.stopPropagation(); el.classList.remove("drag-over"); if (draggedId) moveNode(draggedId, node.id); };
 
 			// Icon
 			const icon = document.createElement("span");
@@ -1370,10 +1460,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function getIcon(node) {
 		if (node.type === "folder") return node.isOpen ? "folder-open" : "folder";
 		const ext = node.name.split(".").pop()?.toLowerCase();
-		const m = { md:"file-text", txt:"file-text", js:"file-code", ts:"file-code", jsx:"file-code",
-			tsx:"file-code", html:"file-code", css:"file-code", json:"braces", yaml:"file-code",
-			yml:"file-code", toml:"file-code", py:"file-code", go:"file-code", sh:"terminal",
-			bash:"terminal", sql:"database" };
+		const m = {
+			md: "file-text", txt: "file-text", js: "file-code", ts: "file-code", jsx: "file-code",
+			tsx: "file-code", html: "file-code", css: "file-code", json: "braces", yaml: "file-code",
+			yml: "file-code", toml: "file-code", py: "file-code", go: "file-code", sh: "terminal",
+			bash: "terminal", sql: "database"
+		};
 		return m[ext] || "file";
 	}
 
@@ -1407,45 +1499,45 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const blocks = [];
 		let inCode = false, codeBuf = [], tableBuf = [];
 
-		const flushCode  = () => { if (codeBuf.length) { blocks.push({ type:"code", data:{ code:codeBuf.join("\n") } }); codeBuf=[]; } };
+		const flushCode = () => { if (codeBuf.length) { blocks.push({ type: "code", data: { code: codeBuf.join("\n") } }); codeBuf = []; } };
 		const flushTable = () => {
 			if (!tableBuf.length) return;
-			const content = tableBuf.map(r => r.split("|").slice(1,-1).map(c=>c.trim())).filter(r=>r.length&&!r.every(c=>/^:?-+:?$/.test(c)));
-			if (content.length) blocks.push({ type:"table", data:{ content, withHeadings:true } });
-			tableBuf=[];
+			const content = tableBuf.map(r => r.split("|").slice(1, -1).map(c => c.trim())).filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c)));
+			if (content.length) blocks.push({ type: "table", data: { content, withHeadings: true } });
+			tableBuf = [];
 		};
 
 		for (const line of lines) {
-			if (line.trim().startsWith("```")) { inCode ? (inCode=false, flushCode()) : (flushTable(), inCode=true); continue; }
+			if (line.trim().startsWith("```")) { inCode ? (inCode = false, flushCode()) : (flushTable(), inCode = true); continue; }
 			if (inCode) { codeBuf.push(line); continue; }
 			if (line.trim().startsWith("|") && line.trim().endsWith("|")) { tableBuf.push(line.trim()); continue; }
 			flushTable();
 			const t = line.trim();
 			if (!t) continue;
-			if      (t.startsWith("#### ")) blocks.push({type:"header",data:{text:md2h(t.slice(5)),level:4}});
-			else if (t.startsWith("### " )) blocks.push({type:"header",data:{text:md2h(t.slice(4)),level:3}});
-			else if (t.startsWith("## "  )) blocks.push({type:"header",data:{text:md2h(t.slice(3)),level:2}});
-			else if (t.startsWith("# "   )) blocks.push({type:"header",data:{text:md2h(t.slice(2)),level:1}});
-			else if (t.startsWith("> "   )) blocks.push({type:"quote",data:{text:md2h(t.slice(2)),caption:""}});
+			if (t.startsWith("#### ")) blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } });
+			else if (t.startsWith("### ")) blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } });
+			else if (t.startsWith("## ")) blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } });
+			else if (t.startsWith("# ")) blocks.push({ type: "header", data: { text: md2h(t.slice(2)), level: 1 } });
+			else if (t.startsWith("> ")) blocks.push({ type: "quote", data: { text: md2h(t.slice(2)), caption: "" } });
 			else if (/^- \[[ xX]\] /.test(t)) {
-				const checked=t[3].toLowerCase()==="x", text=md2h(t.slice(6)), last=blocks[blocks.length-1];
-				if (last?.type==="checklist") last.data.items.push({text,checked});
-				else blocks.push({type:"checklist",data:{items:[{text,checked}]}});
+				const checked = t[3].toLowerCase() === "x", text = md2h(t.slice(6)), last = blocks[blocks.length - 1];
+				if (last?.type === "checklist") last.data.items.push({ text, checked });
+				else blocks.push({ type: "checklist", data: { items: [{ text, checked }] } });
 			}
-			else if (t.startsWith("- ")||t.startsWith("* ")) {
-				const text=md2h(t.slice(2)), last=blocks[blocks.length-1];
-				if (last?.type==="list") last.data.items.push({ content: text, items: [] });
-				else blocks.push({type:"list",data:{style:"unordered",items:[{ content: text, items: [] }]}});
+			else if (t.startsWith("- ") || t.startsWith("* ")) {
+				const text = md2h(t.slice(2)), last = blocks[blocks.length - 1];
+				if (last?.type === "list") last.data.items.push({ content: text, items: [] });
+				else blocks.push({ type: "list", data: { style: "unordered", items: [{ content: text, items: [] }] } });
 			}
 			else if (/^\d+\. /.test(t)) {
-				const text=md2h(t.replace(/^\d+\. /,"")), last=blocks[blocks.length-1];
-				if (last?.type==="list") last.data.items.push({ content: text, items: [] });
-				else blocks.push({type:"list",data:{style:"ordered",items:[{ content: text, items: [] }]}});
+				const text = md2h(t.replace(/^\d+\. /, "")), last = blocks[blocks.length - 1];
+				if (last?.type === "list") last.data.items.push({ content: text, items: [] });
+				else blocks.push({ type: "list", data: { style: "ordered", items: [{ content: text, items: [] }] } });
 			}
-			else blocks.push({type:"paragraph",data:{text:md2h(line)}});
+			else blocks.push({ type: "paragraph", data: { text: md2h(line) } });
 		}
 		flushCode(); flushTable();
-		return blocks.length ? blocks : [{type:"paragraph",data:{text:""}}];
+		return blocks.length ? blocks : [{ type: "paragraph", data: { text: "" } }];
 	}
 
 	function md2h(s) {
@@ -1478,8 +1570,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const lines = [];
 		for (const b of data.blocks) {
 			switch (b.type) {
-				case "header":    lines.push("#".repeat(b.data.level||1)+" "+h2md(b.data.text),""); break;
-				case "paragraph": lines.push(h2md(b.data.text),""); break;
+				case "header": lines.push("#".repeat(b.data.level || 1) + " " + h2md(b.data.text), ""); break;
+				case "paragraph": lines.push(h2md(b.data.text), ""); break;
 				case "list":
 					(function extractItems(items, depth = 0, style = b.data.style || "unordered") {
 						(items || []).forEach((it, i) => {
@@ -1494,11 +1586,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 					})(b.data.items);
 					lines.push("");
 					break;
-				case "checklist": (b.data.items||[]).forEach(it=>lines.push(`- [${it.checked?"x":" "}] ${h2md(it.text)}`)); lines.push(""); break;
-				case "quote":     lines.push(`> ${h2md(b.data.text)}`,""); break;
-				case "code":      lines.push("```",b.data.code||"","```",""); break;
-				case "table":     if (b.data.content?.length){b.data.content.forEach((r,i)=>{lines.push(`| ${r.map(c=>h2md(c)).join(" | ")} |`);if(i===0)lines.push(`| ${r.map(()=>"---").join(" | ")} |`);}); lines.push("");} break;
-				default:          if (b.data?.text){lines.push(h2md(b.data.text),"");} break;
+				case "checklist": (b.data.items || []).forEach(it => lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`)); lines.push(""); break;
+				case "quote": lines.push(`> ${h2md(b.data.text)}`, ""); break;
+				case "code": lines.push("```", b.data.code || "", "```", ""); break;
+				case "table": if (b.data.content?.length) { b.data.content.forEach((r, i) => { lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`); if (i === 0) lines.push(`| ${r.map(() => "---").join(" | ")} |`); }); lines.push(""); } break;
+				default: if (b.data?.text) { lines.push(h2md(b.data.text), ""); } break;
 			}
 		}
 		return lines.join("\n").trim();
@@ -1520,7 +1612,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const blocks = textToBlocks(content);
 		if (editorInstance) {
 			try { await editorInstance.isReady; await editorInstance.render({ blocks }); return; }
-			catch (e) { try { editorInstance.destroy(); } catch (_) {} editorInstance = null; }
+			catch (e) { try { editorInstance.destroy(); } catch (_) { } editorInstance = null; }
 		}
 		createEditorJsInstance(blocks);
 	}
@@ -1533,14 +1625,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 		editorjsWrapper.appendChild(holder);
 
 		const tools = {};
-		if (typeof Header     !== "undefined") tools.header    = { class: Header };
+		if (typeof Header !== "undefined") tools.header = { class: Header };
 		const ListTool = typeof NestedList !== "undefined" ? NestedList : (typeof List !== "undefined" ? List : null);
-		if (ListTool)                          tools.list      = { class: ListTool, inlineToolbar: true };
-		if (typeof Checklist  !== "undefined") tools.checklist = { class: Checklist, inlineToolbar: true };
-		if (typeof Quote     !== "undefined") tools.quote     = { class: Quote, inlineToolbar: true };
-		if (typeof CodeTool  !== "undefined") tools.code      = { class: CodeTool };
-		if (typeof InlineCode!== "undefined") tools.inlineCode= { class: InlineCode };
-		if (typeof Table     !== "undefined") tools.table     = { class: Table, inlineToolbar: true, config: { rows: 2, cols: 2 } };
+		if (ListTool) tools.list = { class: ListTool, inlineToolbar: true };
+		if (typeof Checklist !== "undefined") tools.checklist = { class: Checklist, inlineToolbar: true };
+		if (typeof Quote !== "undefined") tools.quote = { class: Quote, inlineToolbar: true };
+		if (typeof CodeTool !== "undefined") tools.code = { class: CodeTool };
+		if (typeof InlineCode !== "undefined") tools.inlineCode = { class: InlineCode };
+		if (typeof Table !== "undefined") tools.table = { class: Table, inlineToolbar: true, config: { rows: 2, cols: 2 } };
 
 		editorInstance = new EditorJS({
 			holder: "editorjs-holder",
@@ -1560,7 +1652,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 							editorTextarea.value = f.content;
 							persistCurrent();
 							syncWorkspace();
-						} catch (_) {}
+						} catch (_) { }
 					}
 				}, 400);
 			}
@@ -1641,7 +1733,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		codeEl.textContent = val;
 
 		if (typeof Prism !== "undefined") {
-			try { Prism.highlightElement(codeEl); } catch (_) {}
+			try { Prism.highlightElement(codeEl); } catch (_) { }
 		}
 	}
 
@@ -1668,8 +1760,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 	function updateCursor() {
 		const before = editorTextarea.value.substring(0, editorTextarea.selectionStart);
-		const lines  = before.split("\n");
-		cursorPosSpan.textContent = `Ln ${lines.length}, Col ${lines[lines.length-1].length+1}`;
+		const lines = before.split("\n");
+		cursorPosSpan.textContent = `Ln ${lines.length}, Col ${lines[lines.length - 1].length + 1}`;
 	}
 
 	editorTextarea.addEventListener("input", async () => {
@@ -1682,8 +1774,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (e.key === "Tab") {
 			e.preventDefault();
 			const s = editorTextarea.selectionStart, end = editorTextarea.selectionEnd;
-			editorTextarea.value = editorTextarea.value.substring(0,s)+"    "+editorTextarea.value.substring(end);
-			editorTextarea.selectionStart = editorTextarea.selectionEnd = s+4;
+			editorTextarea.value = editorTextarea.value.substring(0, s) + "    " + editorTextarea.value.substring(end);
+			editorTextarea.selectionStart = editorTextarea.selectionEnd = s + 4;
 			editorTextarea.dispatchEvent(new Event("input"));
 		}
 	});
@@ -1724,7 +1816,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// SIDEBAR RESIZE
 	// ============================================================
 	const resizeHandle = document.getElementById("resizeHandle");
-	const sidebar      = document.querySelector(".sidebar");
+	const sidebar = document.querySelector(".sidebar");
 	let isResizing = false, startX = 0, startWidth = 0;
 
 	resizeHandle?.addEventListener("mousedown", (e) => {
@@ -1735,7 +1827,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	});
 	document.addEventListener("mousemove", (e) => {
 		if (!isResizing) return;
-		sidebar.style.width = Math.max(180, Math.min(600, startWidth+(e.clientX-startX))) + "px";
+		sidebar.style.width = Math.max(180, Math.min(600, startWidth + (e.clientX - startX))) + "px";
 	});
 	document.addEventListener("mouseup", () => {
 		if (!isResizing) return;
@@ -1752,7 +1844,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (e.target === fileTreeEl) { selectedId = null; render(); persistCurrent(); loadFile(); }
 	});
 	fileTreeEl.ondragover = (e) => e.preventDefault();
-	fileTreeEl.ondrop     = () => { if (draggedId) moveNode(draggedId, null); };
+	fileTreeEl.ondrop = () => { if (draggedId) moveNode(draggedId, null); };
 
 	// ============================================================
 	// INIT
@@ -1761,11 +1853,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	// Migrate old data from previous single-workspace version
 	const oldFiles = localStorage.getItem("keeplocal_files");
-	const oldCfg   = localStorage.getItem("keeplocal_config");
+	const oldCfg = localStorage.getItem("keeplocal_config");
 	if (oldFiles && workspaces.length === 0) {
 		const wsId = uid("ws");
 		const migFiles = JSON.parse(oldFiles);
-		const migCfg   = oldCfg ? JSON.parse(oldCfg) : {};
+		const migCfg = oldCfg ? JSON.parse(oldCfg) : {};
 		workspaces.push({
 			id: wsId, name: "My Notes", createdAt: Date.now(),
 			lastOpenedAt: Date.now(), folderName: null, fileCount: countAllFiles(migFiles)
