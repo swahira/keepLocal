@@ -4,97 +4,278 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>localKeep - Your Local Editor</title>
+    <title>KeepLocal – Your Local Editor</title>
+    <meta name="description"
+        content="KeepLocal is a private, local-first note editor with rich block editing, folder sync, and markdown support.">
+    <link rel="icon" type="image/png" href="assets/keeplocal.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;1,14..32,400&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="css/styles.css" />
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/editorjs@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/header@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/nested-list@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/checklist@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/quote@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/code@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/inline-code@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/table@latest"></script>
+    <!-- Prism.js Syntax Highlighting -->
+    <link id="prismTheme" rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script
+        src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
 </head>
 
-<body data-theme="light">
+<body data-theme="dark">
 
-    <div class="app">
+    <!-- ══════════════════════════════════════════════════════
+     WELCOME / WORKSPACES SCREEN
+════════════════════════════════════════════════════════ -->
+    <div id="welcomeScreen" class="welcome-screen">
 
-        <!-- Sidebar -->
-        <div class="sidebar">
-            <div class="toolbar">
-                <button class="btn primary" onclick="addFile()" title="New File">
-                    <i data-lucide="file-plus" size="18"></i>
-                    <span>File</span>
-                </button>
-                <button class="btn" onclick="addFolder()" title="New Folder">
-                    <i data-lucide="folder-plus" size="18"></i>
-                    <span>Folder</span>
-                </button>
-            </div>
-
-            <div class="toolbar secondary-toolbar">
-                <button class="btn-small" onclick="exportAll()" title="Export All as ZIP">
-                    <i data-lucide="download" size="14"></i> Export
-                </button>
-                <button class="btn-small" onclick="document.getElementById('importInput').click()" title="Import ZIP">
-                    <i data-lucide="upload" size="14"></i> Import
-                </button>
-                <input type="file" id="importInput" accept=".zip" style="display: none;" onchange="handleImport(event)">
-            </div>
-
-            <div class="search">
-                <div class="search-container">
-                    <input id="searchInput" placeholder="Search notes..." oninput="handleSearch()" />
+        <!-- Left panel: Branding + Actions -->
+        <div class="welcome-left">
+            <div class="welcome-brand">
+                <img src="assets/keeplocal.png" alt="KeepLocal" class="welcome-logo-img">
+                <div>
+                    <h1 class="welcome-app-name">Keep<span>Local</span></h1>
+                    <p class="welcome-tagline">Local-first note editor</p>
                 </div>
             </div>
 
-            <div class="file-section">
-                <div id="fileTree" class="file-tree"></div>
-                <button class="save-workspace-btn" onclick="saveWorkspace()" title="Choose a folder to save and automatically sync your workspace">
-                    <span>Save Workspace</span>
+            <div class="welcome-actions">
+                <button class="welcome-action-btn primary" onclick="createNewWorkspace()">
+                    <i data-lucide="plus" size="18"></i>
+                    <div class="action-btn-text">
+                        <span>New Workspace</span>
+                        <small>Start fresh with a new local workspace</small>
+                    </div>
                 </button>
+
+                <button class="welcome-action-btn" id="openFolderBtn" onclick="openFolderWorkspace()">
+                    <i data-lucide="folder-open" size="18"></i>
+                    <div class="action-btn-text">
+                        <span>Open Folder</span>
+                        <small>Connect an existing folder from your system</small>
+                    </div>
+                </button>
+
+                <button class="welcome-action-btn" onclick="importZipOnWelcome()">
+                    <i data-lucide="archive" size="18"></i>
+                    <div class="action-btn-text">
+                        <span>Import ZIP</span>
+                        <small>Import notes from a ZIP archive</small>
+                    </div>
+                </button>
+                <input type="file" id="welcomeImportInput" accept=".zip" style="display:none"
+                    onchange="handleWelcomeImport(event)">
+            </div>
+
+            <div class="welcome-tips">
+                <div class="welcome-tip">
+                    <i data-lucide="zap" size="13"></i>
+                    <span><b>Ctrl+S</b> syncs to connected folder</span>
+                </div>
+                <div class="welcome-tip">
+                    <i data-lucide="zap" size="13"></i>
+                    <span><b>Ctrl+N</b> creates a new file</span>
+                </div>
+                <div class="welcome-tip">
+                    <i data-lucide="zap" size="13"></i>
+                    <span>Type <b>/</b> in block editor for commands</span>
+                </div>
+            </div>
+
+            <div id="welcomeFsBanner" class="welcome-fs-banner hidden">
+                <i data-lucide="alert-triangle" size="14"></i>
+                Folder sync requires Chrome, Edge, or Brave.
+            </div>
+        </div>
+
+        <!-- Right panel: Workspaces list -->
+        <div class="welcome-right">
+            <div class="welcome-right-header">
+                <h2>Workspaces</h2>
+                <span id="wsCountBadge" class="ws-count-badge">0</span>
+            </div>
+
+            <div id="workspacesList" class="workspaces-list">
+                <!-- Populated by JS -->
+            </div>
+
+            <div id="workspacesEmpty" class="workspaces-empty hidden">
+                <i data-lucide="inbox" size="36"></i>
+                <p>No workspaces yet</p>
+                <small>Click "New Workspace" to get started</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════
+     EDITOR APP
+════════════════════════════════════════════════════════ -->
+    <div id="appShell" class="app hidden">
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <!-- Sidebar Header / Workspace Switcher -->
+            <div class="sidebar-header" style="position: relative;">
+                <button class="ws-switcher-btn" id="wsSwitcherBtn" onclick="toggleWsDropdown(event)"
+                    title="Switch Workspace">
+                    <img src="assets/keeplocal.png" alt="KeepLocal" class="sidebar-logo-img">
+                    <div class="ws-name-wrap">
+                        <span class="sidebar-ws-name" id="sidebarWsName">Workspace</span>
+                        <span class="sidebar-ws-folder" id="sidebarWsFolder">Local Storage</span>
+                    </div>
+                    <i data-lucide="chevrons-up-down" size="14" class="ws-switch-icon"></i>
+                </button>
+
+                <!-- Workspace Switcher Dropdown Menu (GitHub style) -->
+                <div id="wsDropdown" class="ws-dropdown hidden">
+                    <div class="ws-dropdown-header">
+                        <span>Switch workspace</span>
+                    </div>
+                    <div class="ws-dropdown-search">
+                        <input id="wsSearchInput" placeholder="Search workspaces..." oninput="filterWsDropdown()" />
+                    </div>
+                    <div id="wsDropdownList" class="ws-dropdown-list">
+                        <!-- Dynamic workspace items -->
+                    </div>
+                    <div class="ws-dropdown-divider"></div>
+                    <div class="ws-dropdown-item ws-dropdown-action" onclick="goHome()">
+                        <i data-lucide="layout-grid" size="14"></i>
+                        <span>All Workspaces</span>
+                    </div>
+                    <div class="ws-dropdown-item ws-dropdown-action" onclick="createNewWorkspace(); hideWsDropdown();">
+                        <i data-lucide="plus" size="14"></i>
+                        <span>Create New Workspace</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Files Section with inline actions header -->
+            <div class="sidebar-section">
+                <div class="section-header">
+                    <div class="section-title-wrap" onclick="toggleSection('filesSection')">
+                        <i data-lucide="chevron-down" size="13" class="section-chevron" id="filesSectionChevron"></i>
+                        <span class="section-title">EXPLORER</span>
+                    </div>
+                    <div class="section-actions">
+                        <button class="icon-btn" onclick="resyncFromDisk()" title="Refresh / Re-sync from Disk">
+                            <i data-lucide="refresh-cw" size="11"></i>
+                        </button>
+                        <button class="icon-btn" onclick="toggleSearchBar()" title="Search Files">
+                            <i data-lucide="search" size="11"></i>
+                        </button>
+                        <button class="icon-btn" onclick="addFile()" title="New File (Ctrl+N)">
+                            <i data-lucide="file-plus" size="11"></i>
+                        </button>
+                        <button class="icon-btn" onclick="addFolder()" title="New Folder">
+                            <i data-lucide="folder-plus" size="11"></i>
+                        </button>
+                        <button class="icon-btn" onclick="exportAll()" title="Export ZIP">
+                            <i data-lucide="upload" size="11"></i>
+                        </button>
+                        <button class="icon-btn" onclick="document.getElementById('importInput').click()"
+                            title="Import ZIP">
+                            <i data-lucide="download" size="11"></i>
+                        </button>
+                        <input type="file" id="importInput" accept=".zip" style="display:none"
+                            onchange="handleImport(event)">
+                    </div>
+                </div>
+
+                <!-- Search bar (hidden by default) -->
+                <div id="searchBarWrapper" class="search hidden">
+                    <div class="search-container">
+                        <input id="searchInput" placeholder="Search files..." oninput="handleSearch()" />
+                    </div>
+                </div>
+
+                <div id="filesSection" class="section-body">
+                    <div id="fileTree" class="file-tree"></div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="workspace-footer">
+                <button id="saveWorkspaceBtn" class="save-workspace-btn" onclick="saveWorkspace()"
+                    title="Connect a local folder to sync files">
+                    <i data-lucide="hard-drive" size="14"></i>
+                    <span>Connect Folder</span>
+                </button>
+                <p id="browserSupportMessage" class="browser-support-message hidden">
+                    ⚠ Folder sync requires a Chromium-based browser.
+                </p>
             </div>
         </div>
 
         <!-- Resize Handle -->
         <div class="sidebar-resize-handle" id="resizeHandle"></div>
 
-        <!-- Main Content -->
+        <!-- Main -->
         <div class="main">
+            <!-- Tabs Bar (VS Code style) -->
+            <div id="editorTabsBar" class="editor-tabs-bar">
+                <div id="tabsList" class="tabs-list">
+                    <!-- Dynamic open file tabs -->
+                </div>
+            </div>
 
-            <!-- Top bar -->
             <div class="topbar">
                 <div id="breadcrumb"></div>
-
                 <div class="controls">
+                    <div class="mode-switch-group">
+                        <button id="modeBlockBtn" class="mode-btn active" onclick="switchEditorMode('block')"
+                            title="Block Editor">
+                            <i data-lucide="layout" size="14"></i> Block
+                        </button>
+                        <button id="modePlainBtn" class="mode-btn" onclick="switchEditorMode('plain')" title="Raw Text">
+                            <i data-lucide="code" size="14"></i> Raw
+                        </button>
+                    </div>
                     <button class="control-btn" onclick="changeFontSize(-1)" title="Decrease Font Size">
-                        <i data-lucide="minus" size="16"></i>
+                        <i data-lucide="minus" size="15"></i>
                     </button>
                     <button class="control-btn" onclick="changeFontSize(1)" title="Increase Font Size">
-                        <i data-lucide="plus" size="16"></i>
+                        <i data-lucide="plus" size="15"></i>
                     </button>
-                    <button id="themeToggle" class="control-btn" onclick="toggleTheme()" title="Toggle Dark Mode">
-                        <i data-lucide="moon" size="16"></i>
+                    <button id="wrapToggle" class="control-btn" onclick="toggleWordWrap()"
+                        title="Toggle Word Wrap (Alt+Z)">
+                        <i data-lucide="wrap-text" size="15"></i>
+                    </button>
+                    <button id="themeToggle" class="control-btn" onclick="toggleTheme()" title="Toggle Theme">
+                        <i data-lucide="sun" size="15"></i>
                     </button>
                 </div>
             </div>
 
-            <!-- Editor -->
             <div class="editor-container">
-                <div id="lineNumbers" class="line-numbers"></div>
-                <textarea id="editor" spellcheck="false" placeholder="Start typing..."></textarea>
+                <div id="editorjs" class="editorjs-wrapper"></div>
+                <div id="plainEditorWrapper" class="plain-editor-wrapper hidden">
+                    <div id="lineNumbers" class="line-numbers"></div>
+                    <div class="code-editor-area">
+                        <pre id="codeHighlightPre" aria-hidden="true"><code id="codeHighlightContent"></code></pre>
+                        <textarea id="editor" spellcheck="false" placeholder="Start typing..."></textarea>
+                    </div>
+                </div>
             </div>
 
-            <!-- Status Bar -->
             <div class="statusbar">
-                <span id="cursorPos">Ln 1, Col 1</span>
+                <span id="editorStatus" class="status-left">Block Mode</span>
+                <span id="wsStatusBadge" class="ws-status-badge">No folder</span>
+                <span id="cursorPos" class="status-right">Ln 1, Col 1</span>
             </div>
-
         </div>
-
     </div>
 
-    <!-- Modal Overlay -->
+    <!-- Modal -->
     <div id="modalOverlay" class="modal-overlay">
         <div class="modal-container">
             <div id="modalTitle" class="modal-title">Enter name</div>
@@ -110,20 +291,21 @@
         </div>
     </div>
 
-
     <!-- Context Menu -->
     <div id="contextMenu" class="context-menu hidden">
+        <div class="context-menu-item" id="ctxRename">
+            <i data-lucide="pencil" size="13"></i> Rename
+        </div>
         <div class="context-menu-item" id="ctxExport">
-            <i data-lucide="download" size="14"></i> Export as ZIP
+            <i data-lucide="archive" size="13"></i> Export as ZIP
+        </div>
+        <div class="context-menu-item context-menu-danger" id="ctxDelete">
+            <i data-lucide="trash-2" size="13"></i> Delete
         </div>
     </div>
 
     <script src="js/script.js"></script>
-
-    <script>
-        // Initialize Lucide icons
-        lucide.createIcons();
-    </script>
+    <script>lucide.createIcons();</script>
 </body>
 
 </html>
