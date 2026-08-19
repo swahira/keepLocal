@@ -1222,11 +1222,20 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		applyConfig();
 
+		// Force both layers (textarea + highlighted pre) to repaint together
+		// on the next frame, avoiding the ghosting/double-text artifact.
+		requestAnimationFrame(() => {
+			updateCodeHighlighting();
+			const preEl = document.getElementById("codeHighlightPre");
+			if (preEl) {
+				preEl.scrollTop = editorTextarea.scrollTop;
+				preEl.scrollLeft = editorTextarea.scrollLeft;
+			}
+		});
+
 		if (activeWsId) {
 			saveWsConfig(activeWsId);
 		}
-
-		console.log("Editor font size:", fontSize);
 	};
 	window.toggleSearchBar = function () {
 		const wrapper = document.getElementById("searchBarWrapper");
