@@ -864,7 +864,7 @@ button {
 	overflow: hidden;
 }
 
-.line-numbers {
+/* .line-numbers {
 	width: 36px;
 	background: var(--bg-secondary);
 	border-right: 1px solid var(--border-color);
@@ -881,6 +881,40 @@ button {
 .line-numbers div {
 	height: calc(var(--editor-font-size) * 1.5385);
 	line-height: calc(var(--editor-font-size) * 1.5385);
+} */
+
+.line-numbers {
+    width: 36px;
+    flex-shrink: 0;
+
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border-color);
+
+    color: var(--text-muted);
+    text-align: right;
+
+    padding: 12px 6px 0 0;
+
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+
+    user-select: none;
+    overflow: hidden;
+
+    box-sizing: border-box;
+}
+
+.line-numbers div {
+    height: calc(var(--editor-font-size) * 1.5385);
+    line-height: calc(var(--editor-font-size) * 1.5385);
+
+    font-size: 13px;
+
+    margin: 0;
+    padding: 0;
+
+    white-space: nowrap;
+    box-sizing: border-box;
 }
 
 .code-editor-area {
@@ -891,57 +925,60 @@ button {
 }
 
 #codeHighlightPre {
-	position: absolute;
-	inset: 0;
-	margin: 0;
-	padding: 12px 16px;
-	font-size: var(--editor-font-size);
-	font-family: "JetBrains Mono", "Fira Code", monospace;
-	line-height: 1.5385;
-	white-space: pre;
-	word-wrap: normal;
-	overflow: hidden;
-	pointer-events: none;
-	background: var(--bg-primary);
-	border: none;
-	z-index: 1;
-	box-sizing: border-box;
-	transform: translateZ(0);
-	backface-visibility: hidden;
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 12px 16px;
+
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: var(--editor-font-size);
+    line-height: calc(var(--editor-font-size) * 1.5385);
+    letter-spacing: normal;
+
+    white-space: pre;
+    word-wrap: normal;
+    overflow: hidden;
+    pointer-events: none;
+
+    background: var(--bg-primary);
+    border: none;
+    z-index: 1;
+    box-sizing: border-box;
 }
 
 #codeHighlightPre code {
-	transform: translateZ(0);
-	backface-visibility: hidden;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    letter-spacing: inherit;
+    background: transparent !important;
+    padding: 0 !important;
 }
 
 #editor {
-	position: absolute;
-	inset: 0;
-	margin: 0;
-	padding: 12px 16px;
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 12px 16px;
 
-	font-family: "JetBrains Mono", "Fira Code", monospace;
-	font-size: var(--editor-font-size);
-	line-height: 1.5385;
-	letter-spacing: normal;
-	white-space: pre;
-	tab-size: 4;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: var(--editor-font-size);
+    line-height: calc(var(--editor-font-size) * 1.5385);
+    letter-spacing: normal;
+    white-space: pre;
+    tab-size: 4;
 
-	overflow: auto;
-	box-sizing: border-box;
-	z-index: 2;
+    overflow: auto;
+    box-sizing: border-box;
+    z-index: 2;
 
-	background: transparent;
-	color: transparent;
-	caret-color: var(--text-primary);
+    background: transparent;
+    color: transparent;
+    caret-color: var(--text-primary);
 
-	resize: none;
-	border: none;
-	outline: none;
-
-	transform: translateZ(0);
-	backface-visibility: hidden;
+    resize: none;
+    border: none;
+    outline: none;
 }
 
 /* Word Wrap Mode */

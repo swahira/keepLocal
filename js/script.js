@@ -613,10 +613,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 
 		// Line numbers
-		if (lineNumbersEl) {
-			lineNumbersEl.style.fontSize = `${fontSize}px`;
-		}
+		// if (lineNumbersEl) {
+		// 	lineNumbersEl.style.fontSize = `${fontSize}px`;
+		// }
 
+		// Line numbers
+		if (lineNumbersEl) {
+			const lineHeight = fontSize * 1.5385;
+
+			// Number itself stays small
+			lineNumbersEl.style.fontSize = "13px";
+
+			// But each number occupies one full editor line
+			lineNumbersEl.style.lineHeight = `${lineHeight}px`;
+
+			lineNumbersEl.querySelectorAll("div").forEach((line) => {
+				line.style.height = `${lineHeight}px`;
+				line.style.lineHeight = `${lineHeight}px`;
+				line.style.fontSize = "13px";
+			});
+		}
 		// Code highlighting
 		const codeHighlightPre =
 			document.getElementById("codeHighlightPre");
@@ -841,6 +857,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 	modalCancelBtn.onclick = () => hideModal();
 	modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) hideModal(); });
 
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && modalOverlay.classList.contains("active")) {
+			e.preventDefault();
+			hideModal();
+		}
+	});
 	// ============================================================
 	// FILESYSTEM SYNC
 	// ============================================================
@@ -1220,17 +1242,29 @@ document.addEventListener("DOMContentLoaded", async () => {
 			Math.min(MAX_FONT_SIZE, fontSize + delta)
 		);
 
-		applyConfig();
+		// Save current scroll position
+		const scrollTop = editorTextarea?.scrollTop || 0;
+		const scrollLeft = editorTextarea?.scrollLeft || 0;
 
-		// Force both layers (textarea + highlighted pre) to repaint together
-		// on the next frame, avoiding the ghosting/double-text artifact.
+		applyConfig();
+		updateLineNumbers();
+
+		// Rebuild highlighting after browser recalculates font metrics
 		requestAnimationFrame(() => {
 			updateCodeHighlighting();
-			const preEl = document.getElementById("codeHighlightPre");
-			if (preEl) {
-				preEl.scrollTop = editorTextarea.scrollTop;
-				preEl.scrollLeft = editorTextarea.scrollLeft;
-			}
+
+			requestAnimationFrame(() => {
+				const preEl = document.getElementById("codeHighlightPre");
+
+				if (editorTextarea && preEl) {
+					preEl.scrollTop = scrollTop;
+					preEl.scrollLeft = scrollLeft;
+				}
+
+				if (lineNumbersEl) {
+					lineNumbersEl.scrollTop = scrollTop;
+				}
+			});
 		});
 
 		if (activeWsId) {
@@ -1416,6 +1450,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (e.target.closest(".action-btn")) return;
 				if (node.type === "folder") {
 					node.isOpen = !node.isOpen;
+					selectedId = node.id;
+					document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
+					el.classList.add("active");
 					persistCurrent();
 					// In-place DOM toggle without full tree re-render
 					const iconEl = el.querySelector(".icon i");
@@ -1429,6 +1466,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					} else {
 						render();
 					}
+					updateBreadcrumbs();
 				} else {
 					openTab(node.id);
 					document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
@@ -1719,30 +1757,68 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function updateCodeHighlighting() {
 		const codeEl = document.getElementById("codeHighlightContent");
 		const preEl = document.getElementById("codeHighlightPre");
-		if (!codeEl || !editorTextarea) return;
+
+		if (!codeEl || !editorTextarea || !preEl) return;
 
 		const file = findNode(files, selectedId);
-		const ext = file?.name ? file.name.split(".").pop().toLowerCase() : "";
+		const ext = file?.name
+			? file.name.split(".").pop().toLowerCase()
+			: "";
 
 		const langMap = {
-			js: "javascript", jsx: "jsx", ts: "typescript", tsx: "tsx",
-			html: "html", css: "css", json: "json", py: "python",
-			sh: "bash", bash: "bash", go: "go", rs: "rust",
-			java: "java", c: "c", cpp: "cpp", h: "c",
-			sql: "sql", yaml: "yaml", yml: "yaml", xml: "markup",
-			md: "markdown", markdown: "markdown"
+			js: "javascript",
+			jsx: "jsx",
+			ts: "typescript",
+			tsx: "tsx",
+			html: "html",
+			css: "css",
+			json: "json",
+			py: "python",
+			sh: "bash",
+			bash: "bash",
+			go: "go",
+			rs: "rust",
+			java: "java",
+			c: "c",
+			cpp: "cpp",
+			h: "c",
+			sql: "sql",
+			yaml: "yaml",
+			yml: "yaml",
+			xml: "markup",
+			md: "markdown",
+			markdown: "markdown"
 		};
 
 		const lang = langMap[ext] || "clike";
+
 		codeEl.className = `language-${lang}`;
 
-		// Escape text HTML for safe highlight rendering
 		let val = editorTextarea.value || "";
-		if (val.endsWith("\n")) val += " "; // Preserve trailing line height matching
+
+		if (val.endsWith("\n")) {
+			val += " ";
+		}
+
 		codeEl.textContent = val;
 
+		// Keep both rendering layers identical
+		const computed = getComputedStyle(editorTextarea);
+
+		preEl.style.fontFamily = computed.fontFamily;
+		preEl.style.fontSize = computed.fontSize;
+		preEl.style.lineHeight = computed.lineHeight;
+		preEl.style.letterSpacing = computed.letterSpacing;
+
+		codeEl.style.fontFamily = computed.fontFamily;
+		codeEl.style.fontSize = computed.fontSize;
+		codeEl.style.lineHeight = computed.lineHeight;
+		codeEl.style.letterSpacing = computed.letterSpacing;
+
 		if (typeof Prism !== "undefined") {
-			try { Prism.highlightElement(codeEl); } catch (_) { }
+			try {
+				Prism.highlightElement(codeEl);
+			} catch (_) { }
 		}
 	}
 
