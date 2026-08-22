@@ -1560,7 +1560,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (line.trim().startsWith("|") && line.trim().endsWith("|")) { tableBuf.push(line.trim()); continue; }
 			flushTable();
 			const t = line.trim();
-			if (!t) continue;
+			if (!t) { blocks.push({ type: "paragraph", data: { text: "" } }); continue; }
 			if (t.startsWith("#### ")) blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } });
 			else if (t.startsWith("### ")) blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } });
 			else if (t.startsWith("## ")) blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } });
@@ -1617,8 +1617,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const lines = [];
 		for (const b of data.blocks) {
 			switch (b.type) {
-				case "header": lines.push("#".repeat(b.data.level || 1) + " " + h2md(b.data.text), ""); break;
-				case "paragraph": lines.push(h2md(b.data.text), ""); break;
+				case "header": lines.push("#".repeat(b.data.level || 1) + " " + h2md(b.data.text)); break;
+				case "paragraph": lines.push(h2md(b.data.text)); break;
 				case "list":
 					(function extractItems(items, depth = 0, style = b.data.style || "unordered") {
 						(items || []).forEach((it, i) => {
@@ -1631,13 +1631,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 							}
 						});
 					})(b.data.items);
-					lines.push("");
 					break;
-				case "checklist": (b.data.items || []).forEach(it => lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`)); lines.push(""); break;
-				case "quote": lines.push(`> ${h2md(b.data.text)}`, ""); break;
-				case "code": lines.push("```", b.data.code || "", "```", ""); break;
-				case "table": if (b.data.content?.length) { b.data.content.forEach((r, i) => { lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`); if (i === 0) lines.push(`| ${r.map(() => "---").join(" | ")} |`); }); lines.push(""); } break;
-				default: if (b.data?.text) { lines.push(h2md(b.data.text), ""); } break;
+				case "checklist": (b.data.items || []).forEach(it => lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`)); break;
+				case "quote": lines.push(`> ${h2md(b.data.text)}`); break;
+				case "code": lines.push("```", b.data.code || "", "```"); break;
+				case "table": if (b.data.content?.length) { b.data.content.forEach((r, i) => { lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`); if (i === 0) lines.push(`| ${r.map(() => "---").join(" | ")} |`); }); } break;
+				default: if (b.data?.text) { lines.push(h2md(b.data.text)); } break;
 			}
 		}
 		return lines.join("\n").trim();
@@ -1672,6 +1671,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		editorjsWrapper.appendChild(holder);
 
 		const tools = {};
+		tools.paragraph = { config: { preserveBlank: true }, inlineToolbar: true }; // ← NEW
 		if (typeof Header !== "undefined") tools.header = { class: Header };
 		const ListTool = typeof NestedList !== "undefined" ? NestedList : (typeof List !== "undefined" ? List : null);
 		if (ListTool) tools.list = { class: ListTool, inlineToolbar: true };
@@ -1815,6 +1815,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 		codeEl.style.lineHeight = computed.lineHeight;
 		codeEl.style.letterSpacing = computed.letterSpacing;
 
+
+		if (lineNumbersEl) {
+			lineNumbersEl.style.lineHeight = computed.lineHeight;
+		}
+
 		if (typeof Prism !== "undefined") {
 			try {
 				Prism.highlightElement(codeEl);
@@ -1838,10 +1843,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function updateLineNumbers() {
 		if (!lineNumbersEl) return;
 		const count = editorTextarea.value.split("\n").length;
-		lineNumbersEl.innerHTML = "";
-		for (let i = 1; i <= count; i++) {
-			const d = document.createElement("div"); d.textContent = i; lineNumbersEl.appendChild(d);
-		}
+		const nums = [];
+		for (let i = 1; i <= count; i++) nums.push(i);
+		lineNumbersEl.textContent = nums.join("\n");
 	}
 	function updateCursor() {
 		const before = editorTextarea.value.substring(0, editorTextarea.selectionStart);
