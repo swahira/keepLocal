@@ -656,14 +656,26 @@ button {
 	overflow-y: hidden;
 	flex-shrink: 0;
 	user-select: none;
+	scroll-behavior: smooth;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border-color) transparent;
 }
 
 .editor-tabs-bar::-webkit-scrollbar {
-	height: 2px;
+	height: 4px;
+}
+
+.editor-tabs-bar::-webkit-scrollbar-track {
+	background: transparent;
 }
 
 .editor-tabs-bar::-webkit-scrollbar-thumb {
 	background: var(--border-color);
+	border-radius: 4px;
+}
+
+.editor-tabs-bar::-webkit-scrollbar-thumb:hover {
+	background: var(--accent-color);
 }
 
 .tabs-list {

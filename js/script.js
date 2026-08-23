@@ -1901,6 +1901,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 	});
 
+	document.addEventListener("keydown", (e) => {
+		if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "l") {
+			e.preventDefault();
+			toggleTheme();
+		}
+	});
+
 	// ============================================================
 	// SIDEBAR RESIZE
 	// ============================================================
