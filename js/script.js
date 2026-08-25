@@ -16,6 +16,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	let theme = "dark";
 	let fontSize = 13;
 	let searchQuery = "";
+	let wsCardSearchQuery = "";
 	let importIdCounter = 0;
 	let workspaceHandle = null;  // FileSystemDirectoryHandle
 	let editorMode = "block";
@@ -188,15 +189,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 		wsCountBadge.textContent = workspaces.length;
 
 		if (workspaces.length === 0) {
+			workspacesEmpty.querySelector("p").textContent = "No workspaces yet";
+			workspacesEmpty.querySelector("small").textContent = 'Click "New Workspace" to get started';
+			workspacesEmpty.classList.remove("hidden");
+			return;
+		}
+
+		// Sort by lastOpenedAt desc
+		const sorted = [...workspaces].sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
+		const filtered = wsCardSearchQuery
+			? sorted.filter(w => w.name.toLowerCase().includes(wsCardSearchQuery))
+			: sorted;
+
+		if (filtered.length === 0) {
+			workspacesEmpty.querySelector("p").textContent = "No matching workspaces";
+			workspacesEmpty.querySelector("small").textContent = "Try a different search term";
 			workspacesEmpty.classList.remove("hidden");
 			return;
 		}
 		workspacesEmpty.classList.add("hidden");
 
-		// Sort by lastOpenedAt desc
-		const sorted = [...workspaces].sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
-
-		for (const ws of sorted) {
+		for (const ws of filtered) {
 			const card = document.createElement("div");
 			card.className = "ws-card";
 			card.setAttribute("data-wsid", ws.id);
@@ -207,26 +220,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 				: `<span class="ws-card-badge local-badge"><i data-lucide="hard-drive" size="10"></i>Local</span>`;
 
 			card.innerHTML = `
-				<div class="ws-card-icon">
-					<i data-lucide="${ws.folderName ? 'folder-open' : 'layers'}" size="22"></i>
+			<div class="ws-card-icon">
+				<i data-lucide="${ws.folderName ? 'folder-open' : 'layers'}" size="22"></i>
+			</div>
+			<div class="ws-card-body">
+				<div class="ws-card-name">${escHtml(ws.name)}</div>
+				<div class="ws-card-meta">
+					${folderBadge}
+					<span class="ws-card-files">${ws.fileCount || 0} file${ws.fileCount !== 1 ? 's' : ''}</span>
+					<span class="ws-card-time">${relTime}</span>
 				</div>
-				<div class="ws-card-body">
-					<div class="ws-card-name">${escHtml(ws.name)}</div>
-					<div class="ws-card-meta">
-						${folderBadge}
-						<span class="ws-card-files">${ws.fileCount || 0} file${ws.fileCount !== 1 ? 's' : ''}</span>
-						<span class="ws-card-time">${relTime}</span>
-					</div>
-				</div>
-				<div class="ws-card-actions">
-					<button class="ws-card-btn" title="Rename" onclick="event.stopPropagation(); renameWorkspace('${ws.id}')">
-						<i data-lucide="pencil" size="13"></i>
-					</button>
-					<button class="ws-card-btn danger" title="Delete workspace" onclick="event.stopPropagation(); deleteWorkspace('${ws.id}')">
-						<i data-lucide="trash-2" size="13"></i>
-					</button>
-				</div>
-			`;
+			</div>
+			<div class="ws-card-actions">
+				<button class="ws-card-btn" title="Rename" onclick="event.stopPropagation(); renameWorkspace('${ws.id}')">
+					<i data-lucide="pencil" size="13"></i>
+				</button>
+				<button class="ws-card-btn danger" title="Delete workspace" onclick="event.stopPropagation(); deleteWorkspace('${ws.id}')">
+					<i data-lucide="trash-2" size="13"></i>
+				</button>
+			</div>
+		`;
 
 			card.addEventListener("click", () => openWorkspace(ws.id));
 			workspacesList.appendChild(card);
@@ -279,6 +292,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const q = wsSearchInput.value.toLowerCase().trim();
 		renderWsDropdownItems(q);
 	};
+	window.filterWorkspaceCards = function () {
+		wsCardSearchQuery = document.getElementById("wsCardSearchInput").value.toLowerCase().trim();
+		renderWorkspaceCards();
+	};
+	window.toggleWsCardSearch = function () {
+		const input = document.getElementById("wsCardSearchInput");
+		if (!input) return;
+		const isHidden = input.classList.toggle("hidden");
+		if (!isHidden) {
+			setTimeout(() => input.focus(), 30);
+		} else {
+			input.value = "";
+			wsCardSearchQuery = "";
+			renderWorkspaceCards();
+		}
+	};
+
+	document.getElementById("wsCardSearchInput")?.addEventListener("keydown", (e) => {
+		if (e.key === "Escape") toggleWsCardSearch();
+	});
 
 	function renderWsDropdownItems(filter = "") {
 		if (!wsDropdownList) return;
@@ -332,6 +365,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 	window.createNewWorkspace = function () {
 		showInputModal("Workspace name", "My Notes", async (name) => {
 			if (!name) return;
+			if (wsNameExists(name)) {
+				showAlertModal("Duplicate name", `A workspace named "${name}" already exists. Please choose a different name.`);
+				return;
+			}
 			const ws = {
 				id: uid("ws"),
 				name,
@@ -365,7 +402,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			// Create new workspace from folder
 			const ws = {
 				id: uid("ws"),
-				name: handle.name,
+				name: uniqueWsName(handle.name),
 				createdAt: Date.now(),
 				lastOpenedAt: Date.now(),
 				folderName: handle.name,
@@ -399,7 +436,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const file = event.target.files[0];
 		if (!file) return;
 		// Create workspace named after the zip
-		const wsName = file.name.replace(/\.zip$/i, "");
+		const wsName = uniqueWsName(file.name.replace(/\.zip$/i, ""));
 		const ws = {
 			id: uid("ws"),
 			name: wsName,
@@ -459,6 +496,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (!ws) return;
 		showInputModal("Rename workspace", ws.name, (name) => {
 			if (!name || name === ws.name) return;
+			if (wsNameExists(name, wsId)) {
+				showAlertModal("Duplicate name", `A workspace named "${name}" already exists. Please choose a different name.`);
+				return;
+			}
 			ws.name = name;
 			saveWorkspaceMeta();
 			renderWorkspaceCards();
@@ -613,10 +654,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 
 		// Line numbers
-		if (lineNumbersEl) {
-			lineNumbersEl.style.fontSize = `${fontSize}px`;
-		}
+		// if (lineNumbersEl) {
+		// 	lineNumbersEl.style.fontSize = `${fontSize}px`;
+		// }
 
+		// Line numbers
+		if (lineNumbersEl) {
+			const lineHeight = fontSize * 1.5385;
+
+			// Number itself stays small
+			lineNumbersEl.style.fontSize = "13px";
+
+			// But each number occupies one full editor line
+			lineNumbersEl.style.lineHeight = `${lineHeight}px`;
+
+			lineNumbersEl.querySelectorAll("div").forEach((line) => {
+				line.style.height = `${lineHeight}px`;
+				line.style.lineHeight = `${lineHeight}px`;
+				line.style.fontSize = "13px";
+			});
+		}
 		// Code highlighting
 		const codeHighlightPre =
 			document.getElementById("codeHighlightPre");
@@ -693,6 +750,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function updateFolderUI() {
 		const pathBar = document.getElementById("workspacePathBar");
 		const wsFolderLabel = document.getElementById("sidebarWsFolder");
+
+		// Browser doesn't support folder sync at all — leave the
+		// "unsupported browser" state from initWorkspaceButton() alone.
+		if (!supportsFS) {
+			if (workspacePathLabel) workspacePathLabel.textContent = "Local workspace";
+			if (wsFolderLabel) {
+				wsFolderLabel.textContent = "Local storage";
+				wsFolderLabel.classList.remove("has-folder");
+			}
+			if (wsSyncBtn) wsSyncBtn.style.display = "none";
+			if (wsStatusBadge) {
+				wsStatusBadge.textContent = "No folder";
+				wsStatusBadge.classList.remove("connected");
+			}
+			pathBar?.classList.remove("has-folder");
+			if (window.lucide) lucide.createIcons();
+			return;
+		}
+
 		if (workspaceHandle) {
 			if (workspacePathLabel) workspacePathLabel.textContent = workspaceHandle.name;
 			if (wsFolderLabel) {
@@ -704,7 +780,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 				wsStatusBadge.textContent = workspaceHandle.name;
 				wsStatusBadge.classList.add("connected");
 			}
-			if (saveWorkspaceBtn) saveWorkspaceBtn.innerHTML = '<i data-lucide="hard-drive" size="14"></i> <span>Change Folder</span>';
+			if (saveWorkspaceBtn) {
+				saveWorkspaceBtn.innerHTML = '<i data-lucide="hard-drive" size="14"></i> <span>Change Folder</span>';
+				saveWorkspaceBtn.title = `Currently synced with "${workspaceHandle.name}" — click to connect a different folder`;
+			}
 			pathBar?.classList.add("has-folder");
 		} else {
 			if (workspacePathLabel) workspacePathLabel.textContent = "Local workspace";
@@ -717,7 +796,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 				wsStatusBadge.textContent = "No folder";
 				wsStatusBadge.classList.remove("connected");
 			}
-			if (saveWorkspaceBtn) saveWorkspaceBtn.innerHTML = '<i data-lucide="hard-drive" size="14"></i> <span>Connect Folder</span>';
+			if (saveWorkspaceBtn) {
+				saveWorkspaceBtn.innerHTML = '<i data-lucide="hard-drive" size="14"></i> <span>Connect Folder</span>';
+				saveWorkspaceBtn.title = "Connect a local folder to sync files";
+			}
 			pathBar?.classList.remove("has-folder");
 		}
 		if (window.lucide) lucide.createIcons();
@@ -727,6 +809,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (!supportsFS) {
 			saveWorkspaceBtn.disabled = true;
 			saveWorkspaceBtn.classList.add("disabled");
+			saveWorkspaceBtn.title = "Folder sync requires Chrome, Edge, or Brave";
 			browserSupportMsg?.classList.remove("hidden");
 		}
 	}
@@ -769,6 +852,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 	function nameExistsInArray(arr, name, excludeId = null) {
 		return arr.some(n => n.name.toLowerCase() === name.toLowerCase() && n.id !== excludeId);
+	}
+
+	function wsNameExists(name, excludeId = null) {
+		return workspaces.some(w => w.name.toLowerCase() === name.toLowerCase() && w.id !== excludeId);
+	}
+	function uniqueWsName(base) {
+		let name = base, i = 2;
+		while (wsNameExists(name)) name = `${base} (${i++})`;
+		return name;
 	}
 	function countAllFiles(nodes) {
 		let c = 0;
@@ -834,13 +926,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function hideModal() { modalOverlay.classList.remove("active"); modalCb = null; }
 
 	modalInput.addEventListener("keydown", (e) => {
-		if (e.key === "Enter") { if (modalCb) modalCb(modalInput.value.trim()); hideModal(); }
+		if (e.key === "Enter") {
+			const cb = modalCb;
+			if (cb) cb(modalInput.value.trim());
+			// If the callback opened a NEW modal (e.g. a duplicate-name alert),
+			// modalCb will have changed — don't hide that new modal.
+			if (modalCb === cb) hideModal();
+		}
 		if (e.key === "Escape") hideModal();
 	});
 	modalConfirmBtn.onclick = () => { if (modalCb) modalCb(true); hideModal(); };
 	modalCancelBtn.onclick = () => hideModal();
 	modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) hideModal(); });
 
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && modalOverlay.classList.contains("active")) {
+			e.preventDefault();
+			hideModal();
+		}
+	});
 	// ============================================================
 	// FILESYSTEM SYNC
 	// ============================================================
@@ -1061,6 +1165,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		input.type = "text";
 		input.value = n.name;
 		input.className = "inline-rename-input";
+		input.id = `inlineRename_${id}`;
+		input.name = `inlineRename_${id}`;
+		input.autocomplete = "off";
 		span.replaceWith(input);
 		input.focus();
 		const dot = n.name.lastIndexOf(".");
@@ -1220,13 +1327,34 @@ document.addEventListener("DOMContentLoaded", async () => {
 			Math.min(MAX_FONT_SIZE, fontSize + delta)
 		);
 
+		// Save current scroll position
+		const scrollTop = editorTextarea?.scrollTop || 0;
+		const scrollLeft = editorTextarea?.scrollLeft || 0;
+
 		applyConfig();
+		updateLineNumbers();
+
+		// Rebuild highlighting after browser recalculates font metrics
+		requestAnimationFrame(() => {
+			updateCodeHighlighting();
+
+			requestAnimationFrame(() => {
+				const preEl = document.getElementById("codeHighlightPre");
+
+				if (editorTextarea && preEl) {
+					preEl.scrollTop = scrollTop;
+					preEl.scrollLeft = scrollLeft;
+				}
+
+				if (lineNumbersEl) {
+					lineNumbersEl.scrollTop = scrollTop;
+				}
+			});
+		});
 
 		if (activeWsId) {
 			saveWsConfig(activeWsId);
 		}
-
-		console.log("Editor font size:", fontSize);
 	};
 	window.toggleSearchBar = function () {
 		const wrapper = document.getElementById("searchBarWrapper");
@@ -1407,6 +1535,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (e.target.closest(".action-btn")) return;
 				if (node.type === "folder") {
 					node.isOpen = !node.isOpen;
+					selectedId = node.id;
+					document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
+					el.classList.add("active");
 					persistCurrent();
 					// In-place DOM toggle without full tree re-render
 					const iconEl = el.querySelector(".icon i");
@@ -1420,6 +1551,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					} else {
 						render();
 					}
+					updateBreadcrumbs();
 				} else {
 					openTab(node.id);
 					document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
@@ -1513,7 +1645,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (line.trim().startsWith("|") && line.trim().endsWith("|")) { tableBuf.push(line.trim()); continue; }
 			flushTable();
 			const t = line.trim();
-			if (!t) continue;
+			if (!t) { blocks.push({ type: "paragraph", data: { text: "" } }); continue; }
 			if (t.startsWith("#### ")) blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } });
 			else if (t.startsWith("### ")) blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } });
 			else if (t.startsWith("## ")) blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } });
@@ -1570,8 +1702,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const lines = [];
 		for (const b of data.blocks) {
 			switch (b.type) {
-				case "header": lines.push("#".repeat(b.data.level || 1) + " " + h2md(b.data.text), ""); break;
-				case "paragraph": lines.push(h2md(b.data.text), ""); break;
+				case "header": lines.push("#".repeat(b.data.level || 1) + " " + h2md(b.data.text)); break;
+				case "paragraph": lines.push(h2md(b.data.text)); break;
 				case "list":
 					(function extractItems(items, depth = 0, style = b.data.style || "unordered") {
 						(items || []).forEach((it, i) => {
@@ -1584,13 +1716,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 							}
 						});
 					})(b.data.items);
-					lines.push("");
 					break;
-				case "checklist": (b.data.items || []).forEach(it => lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`)); lines.push(""); break;
-				case "quote": lines.push(`> ${h2md(b.data.text)}`, ""); break;
-				case "code": lines.push("```", b.data.code || "", "```", ""); break;
-				case "table": if (b.data.content?.length) { b.data.content.forEach((r, i) => { lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`); if (i === 0) lines.push(`| ${r.map(() => "---").join(" | ")} |`); }); lines.push(""); } break;
-				default: if (b.data?.text) { lines.push(h2md(b.data.text), ""); } break;
+				case "checklist": (b.data.items || []).forEach(it => lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`)); break;
+				case "quote": lines.push(`> ${h2md(b.data.text)}`); break;
+				case "code": lines.push("```", b.data.code || "", "```"); break;
+				case "table": if (b.data.content?.length) { b.data.content.forEach((r, i) => { lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`); if (i === 0) lines.push(`| ${r.map(() => "---").join(" | ")} |`); }); } break;
+				default: if (b.data?.text) { lines.push(h2md(b.data.text)); } break;
 			}
 		}
 		return lines.join("\n").trim();
@@ -1625,6 +1756,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		editorjsWrapper.appendChild(holder);
 
 		const tools = {};
+		tools.paragraph = { config: { preserveBlank: true }, inlineToolbar: true }; // ← NEW
 		if (typeof Header !== "undefined") tools.header = { class: Header };
 		const ListTool = typeof NestedList !== "undefined" ? NestedList : (typeof List !== "undefined" ? List : null);
 		if (ListTool) tools.list = { class: ListTool, inlineToolbar: true };
@@ -1672,7 +1804,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const text = file.content || "";
 			editorTextarea.value = text;
 			editorTextarea.disabled = false;
+			editorTextarea.placeholder = "Start typing...";
 
+			const codeEl = document.getElementById("codeHighlightContent");
+			if (codeEl) codeEl.innerHTML = ""; // prevent stale highlight flash
 			const ext = file.name.split(".").pop()?.toLowerCase();
 			const isMarkdown = ext === "md" || ext === "markdown" || ext === "txt" || !ext;
 
@@ -1707,37 +1842,154 @@ document.addEventListener("DOMContentLoaded", async () => {
 		updateCodeHighlighting();
 	}
 
+	// function updateCodeHighlighting() {
+	// 	const codeEl = document.getElementById("codeHighlightContent");
+	// 	const preEl = document.getElementById("codeHighlightPre");
+
+	// 	if (!codeEl || !editorTextarea || !preEl) return;
+
+	// 	const file = findNode(files, selectedId);
+	// 	const ext = file?.name
+	// 		? file.name.split(".").pop().toLowerCase()
+	// 		: "";
+
+	// 	const langMap = {
+	// 		js: "javascript",
+	// 		jsx: "jsx",
+	// 		ts: "typescript",
+	// 		tsx: "tsx",
+	// 		html: "html",
+	// 		css: "css",
+	// 		json: "json",
+	// 		py: "python",
+	// 		sh: "bash",
+	// 		bash: "bash",
+	// 		go: "go",
+	// 		rs: "rust",
+	// 		java: "java",
+	// 		c: "c",
+	// 		cpp: "cpp",
+	// 		h: "c",
+	// 		sql: "sql",
+	// 		yaml: "yaml",
+	// 		yml: "yaml",
+	// 		xml: "markup",
+	// 		md: "markdown",
+	// 		markdown: "markdown"
+	// 	};
+
+	// 	const lang = langMap[ext] || "clike";
+
+	// 	codeEl.className = `language-${lang}`;
+
+	// 	let val = editorTextarea.value || "";
+
+	// 	if (val.endsWith("\n")) {
+	// 		val += " ";
+	// 	}
+
+	// 	codeEl.textContent = val;
+
+	// 	// Keep both rendering layers identical
+	// 	const computed = getComputedStyle(editorTextarea);
+
+	// 	preEl.style.fontFamily = computed.fontFamily;
+	// 	preEl.style.fontSize = computed.fontSize;
+	// 	preEl.style.lineHeight = computed.lineHeight;
+	// 	preEl.style.letterSpacing = computed.letterSpacing;
+
+	// 	codeEl.style.fontFamily = computed.fontFamily;
+	// 	codeEl.style.fontSize = computed.fontSize;
+	// 	codeEl.style.lineHeight = computed.lineHeight;
+	// 	codeEl.style.letterSpacing = computed.letterSpacing;
+
+
+	// 	if (lineNumbersEl) {
+	// 		lineNumbersEl.style.lineHeight = computed.lineHeight;
+	// 	}
+
+	// 	if (typeof Prism !== "undefined") {
+	// 		try {
+	// 			Prism.highlightElement(codeEl);
+	// 		} catch (_) { }
+	// 	}
+	// }
+
+	// Sync overlay scroll
 	function updateCodeHighlighting() {
 		const codeEl = document.getElementById("codeHighlightContent");
 		const preEl = document.getElementById("codeHighlightPre");
-		if (!codeEl || !editorTextarea) return;
+
+		if (!codeEl || !editorTextarea || !preEl) return;
+
+		// Hard reset first — prevents any stale Prism markup from a
+		// previous file lingering behind the placeholder text.
+		codeEl.innerHTML = "";
+
+		if (!editorTextarea.value) {
+			// Nothing typed — let the native placeholder show alone,
+			// don't render anything in the highlight layer.
+			return;
+		}
 
 		const file = findNode(files, selectedId);
-		const ext = file?.name ? file.name.split(".").pop().toLowerCase() : "";
+		const ext = file?.name
+			? file.name.split(".").pop().toLowerCase()
+			: "";
 
 		const langMap = {
-			js: "javascript", jsx: "jsx", ts: "typescript", tsx: "tsx",
-			html: "html", css: "css", json: "json", py: "python",
-			sh: "bash", bash: "bash", go: "go", rs: "rust",
-			java: "java", c: "c", cpp: "cpp", h: "c",
-			sql: "sql", yaml: "yaml", yml: "yaml", xml: "markup",
-			md: "markdown", markdown: "markdown"
+			js: "javascript",
+			jsx: "jsx",
+			ts: "typescript",
+			tsx: "tsx",
+			html: "html",
+			css: "css",
+			json: "json",
+			py: "python",
+			sh: "bash",
+			bash: "bash",
+			go: "go",
+			rs: "rust",
+			java: "java",
+			c: "c",
+			cpp: "cpp",
+			h: "c",
+			sql: "sql",
+			yaml: "yaml",
+			yml: "yaml",
+			xml: "markup",
+			md: "markdown",
+			markdown: "markdown"
 		};
 
 		const lang = langMap[ext] || "clike";
 		codeEl.className = `language-${lang}`;
 
-		// Escape text HTML for safe highlight rendering
-		let val = editorTextarea.value || "";
-		if (val.endsWith("\n")) val += " "; // Preserve trailing line height matching
+		let val = editorTextarea.value;
+		if (val.endsWith("\n")) val += " ";
 		codeEl.textContent = val;
 
+		const computed = getComputedStyle(editorTextarea);
+		preEl.style.fontFamily = computed.fontFamily;
+		preEl.style.fontSize = computed.fontSize;
+		preEl.style.lineHeight = computed.lineHeight;
+		preEl.style.letterSpacing = computed.letterSpacing;
+
+		codeEl.style.fontFamily = computed.fontFamily;
+		codeEl.style.fontSize = computed.fontSize;
+		codeEl.style.lineHeight = computed.lineHeight;
+		codeEl.style.letterSpacing = computed.letterSpacing;
+
+		if (lineNumbersEl) {
+			lineNumbersEl.style.lineHeight = computed.lineHeight;
+		}
+
 		if (typeof Prism !== "undefined") {
-			try { Prism.highlightElement(codeEl); } catch (_) { }
+			try {
+				Prism.highlightElement(codeEl);
+			} catch (_) { }
 		}
 	}
-
-	// Sync overlay scroll
 	editorTextarea.addEventListener("scroll", () => {
 		const preEl = document.getElementById("codeHighlightPre");
 		if (preEl) {
@@ -1753,10 +2005,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function updateLineNumbers() {
 		if (!lineNumbersEl) return;
 		const count = editorTextarea.value.split("\n").length;
-		lineNumbersEl.innerHTML = "";
-		for (let i = 1; i <= count; i++) {
-			const d = document.createElement("div"); d.textContent = i; lineNumbersEl.appendChild(d);
-		}
+		const nums = [];
+		for (let i = 1; i <= count; i++) nums.push(i);
+		lineNumbersEl.textContent = nums.join("\n");
 	}
 	function updateCursor() {
 		const before = editorTextarea.value.substring(0, editorTextarea.selectionStart);
@@ -1809,6 +2060,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 		if (e.ctrlKey && e.key === "n" && activeWsId) {
 			e.preventDefault(); addFile();
+		}
+	});
+
+	document.addEventListener("keydown", (e) => {
+		if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "l") {
+			e.preventDefault();
+			toggleTheme();
 		}
 	});
 
