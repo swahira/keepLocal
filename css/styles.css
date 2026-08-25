@@ -23,7 +23,7 @@
 	--accent-hover: #059669;
 	--accent-dim: rgba(16, 185, 129, 0.10);
 	--accent-border: rgba(16, 185, 129, 0.30);
-	--selection: rgba(16, 185, 129, 0.13);
+	--selection: rgba(16, 185, 129, 0.22);
 	--hover-bg: #F0FDF4;
 	--active-bg: rgba(16, 185, 129, 0.14);
 	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.04);
@@ -49,7 +49,7 @@
 	--accent-hover: #34D399;
 	--accent-dim: rgba(16, 185, 129, 0.09);
 	--accent-border: rgba(16, 185, 129, 0.22);
-	--selection: rgba(16, 185, 129, 0.11);
+	--selection: rgba(16, 185, 129, 0.22);
 	--hover-bg: #1A1D22;
 	--active-bg: rgba(16, 185, 129, 0.13);
 	--shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.28);
@@ -1040,6 +1040,11 @@ button {
 	padding: 32px 0;
 }
 
+.editorjs-wrapper ::selection {
+	background: var(--selection);
+	/* color: var(--text-primary); */
+}
+
 .editorjs-wrapper::-webkit-scrollbar {
 	width: 5px;
 }
@@ -1800,6 +1805,61 @@ button {
 	background: var(--bg-tertiary);
 	color: var(--text-muted);
 	border: 1px solid var(--border-color);
+}
+
+/* search on the welcome screen */
+.welcome-right-header {
+	position: relative;
+	gap: 8px;
+}
+
+.ws-card-search-btn {
+	width: 28px;
+	height: 28px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 6px;
+	border: 1px solid var(--border-color);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	transition: color var(--transition), border-color var(--transition), background var(--transition);
+	flex-shrink: 0;
+}
+
+.ws-card-search-btn:hover {
+	color: var(--accent-color);
+	border-color: var(--accent-color);
+	background: var(--accent-dim);
+}
+
+.ws-card-search-input {
+	border: 1px solid var(--border-color);
+	outline: none;
+	background: var(--bg-secondary);
+	color: var(--text-primary);
+	font-size: 12.5px;
+	font-family: inherit;
+	width: 220px;
+	padding: 6px 10px;
+	border-radius: 8px;
+	flex-shrink: 0;
+	transition: border-color var(--transition), box-shadow var(--transition);
+	animation: fadeIn 0.12s ease;
+}
+
+.ws-card-search-input.hidden {
+	display: none;
+}
+
+.ws-card-search-input:focus {
+	border-color: var(--accent-color);
+	box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.ws-card-search-input::placeholder {
+	color: var(--text-muted);
 }
 
 /* Workspace cards */
