@@ -107,6 +107,12 @@
             <div class="welcome-right-header">
                 <h2>Workspaces</h2>
                 <span id="wsCountBadge" class="ws-count-badge">0</span>
+                <button class="ws-card-search-btn" id="wsCardSearchBtn" onclick="toggleWsCardSearch()"
+                    title="Search Workspaces">
+                    <i data-lucide="search" size="15"></i>
+                </button>
+                <input id="wsCardSearchInput" class="ws-card-search-input hidden" placeholder="Search workspaces..."
+                    oninput="filterWorkspaceCards()" />
             </div>
 
             <div id="workspacesList" class="workspaces-list">
@@ -209,8 +215,7 @@
 
             <!-- Footer -->
             <div class="workspace-footer">
-                <button id="saveWorkspaceBtn" class="save-workspace-btn" onclick="saveWorkspace()"
-                    title="Connect a local folder to sync files">
+                <button id="saveWorkspaceBtn" class="save-workspace-btn" onclick="saveWorkspace()">
                     <i data-lucide="hard-drive" size="14"></i>
                     <span>Connect Folder</span>
                 </button>
