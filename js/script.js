@@ -109,57 +109,209 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	// ============================================================
-	// WORKSPACE PERSISTENCE
+	// WORKSPACE PERSISTENCE & STORAGE QUOTA MONITORING
 	// ============================================================
+	let lastQuotaWarningTime = 0;
+	const QUOTA_WARNING_COOLDOWN_MS = 60000;
+
+	function isQuotaExceededError(err) {
+		return (
+			err instanceof DOMException &&
+			(err.code === 22 ||
+				err.code === 1014 ||
+				err.name === "QuotaExceededError" ||
+				err.name === "NS_ERROR_DOM_QUOTA_REACHED")
+		);
+	}
+
+	function handleStorageError(err, context = "") {
+		console.warn(`Storage error in ${context}:`, err);
+		if (isQuotaExceededError(err)) {
+			updateStorageQuotaUI(true /* isFull */);
+			notifyStorageQuotaExceeded();
+		}
+	}
+
+	function getLocalStorageUsageChars() {
+		let total = 0;
+		try {
+			for (let i = 0; i < localStorage.length; i++) {
+				const key = localStorage.key(i);
+				if (key) {
+					const val = localStorage.getItem(key);
+					total += key.length + (val ? val.length : 0);
+				}
+			}
+		} catch (_) { }
+		return total;
+	}
+
+	function checkStorageQuota() {
+		if (workspaceHandle) {
+			updateStorageQuotaUI(false, 0);
+			return;
+		}
+		const chars = getLocalStorageUsageChars();
+		const maxChars = 5242880; // ~5MB default browser quota limit
+		const pct = Math.min(100, Math.round((chars / maxChars) * 100));
+
+		if (pct >= 80) {
+			updateStorageQuotaUI(pct >= 98, pct);
+		} else {
+			updateStorageQuotaUI(false, pct);
+		}
+	}
+
+	function updateStorageQuotaUI(isFull, pct = 0) {
+		const banner = document.getElementById("storageQuotaBanner");
+		const text = document.getElementById("storageQuotaText");
+		if (!banner) return;
+
+		if (workspaceHandle) {
+			banner.classList.add("hidden");
+			return;
+		}
+
+		if (isFull) {
+			banner.className = "storage-quota-banner danger";
+			if (text) text.textContent = "Storage full! Connect folder";
+			banner.classList.remove("hidden");
+			if (window.lucide) lucide.createIcons();
+		} else if (pct >= 80) {
+			banner.className = "storage-quota-banner warning";
+			if (text) text.textContent = `Storage ~${pct}% full`;
+			banner.classList.remove("hidden");
+			if (window.lucide) lucide.createIcons();
+		} else {
+			banner.classList.add("hidden");
+		}
+	}
+
+	function notifyStorageQuotaExceeded() {
+		if (workspaceHandle) return; // files are safely on physical disk
+		const now = Date.now();
+		if (now - lastQuotaWarningTime < QUOTA_WARNING_COOLDOWN_MS) return;
+		lastQuotaWarningTime = now;
+
+		if (supportsFS) {
+			showChoiceModal({
+				title: "Browser Storage Limit Reached (~5MB)",
+				message: "Your browser's local storage quota has been reached. New changes cannot be saved locally. Connect a computer folder to save unlimited notes directly to your hard drive, or export your notes.",
+				choices: [
+					{
+						label: "Connect Folder (Recommended)",
+						description: "Save unlimited files directly to your computer's hard drive.",
+						action: "connect",
+						primary: true
+					},
+					{
+						label: "Export ZIP Backup",
+						description: "Download a ZIP archive containing all your workspace notes.",
+						action: "export"
+					},
+					{
+						label: "Dismiss",
+						description: "Continue editing (unsaved changes will not persist across browser reloads).",
+						action: "dismiss"
+					}
+				],
+				onSelect: (action) => {
+					if (action === "connect") {
+						saveWorkspace();
+					} else if (action === "export") {
+						exportAll();
+					}
+				}
+			});
+		} else {
+			showAlertModal(
+				"Browser Storage Full",
+				"Your browser's local storage limit (~5MB) has been reached. Please export your notes or delete unneeded files to free up space."
+			);
+		}
+	}
+
 	function saveWorkspaceMeta() {
-		localStorage.setItem("keeplocal_workspaces", JSON.stringify(workspaces));
+		try {
+			localStorage.setItem("keeplocal_workspaces", JSON.stringify(workspaces));
+		} catch (e) {
+			handleStorageError(e, "saveWorkspaceMeta");
+		}
 	}
 	function loadWorkspaceMeta() {
-		const raw = localStorage.getItem("keeplocal_workspaces");
-		workspaces = raw ? JSON.parse(raw) : [];
+		try {
+			const raw = localStorage.getItem("keeplocal_workspaces");
+			workspaces = raw ? JSON.parse(raw) : [];
+		} catch (e) {
+			console.warn("loadWorkspaceMeta:", e);
+			workspaces = [];
+		}
 	}
 
 	function saveWsFiles(wsId) {
-		localStorage.setItem(`keeplocal_files_${wsId}`, JSON.stringify(files));
+		try {
+			localStorage.setItem(`keeplocal_files_${wsId}`, JSON.stringify(files));
+			checkStorageQuota();
+		} catch (e) {
+			handleStorageError(e, "saveWsFiles");
+		}
 	}
 	function loadWsFiles(wsId) {
-		const raw = localStorage.getItem(`keeplocal_files_${wsId}`);
-		files = raw ? JSON.parse(raw) : [];
+		try {
+			const raw = localStorage.getItem(`keeplocal_files_${wsId}`);
+			files = raw ? JSON.parse(raw) : [];
+		} catch (e) {
+			console.warn("loadWsFiles:", e);
+			files = [];
+		}
 	}
 
 	function saveWsConfig(wsId) {
 		const sidebar = document.querySelector(".sidebar");
-		localStorage.setItem(`keeplocal_cfg_${wsId}`, JSON.stringify({
-			theme, fontSize, selectedId, editorMode, openTabs, isWordWrap,
-			sidebarWidth: sidebar ? sidebar.offsetWidth : undefined
-		}));
+		try {
+			localStorage.setItem(`keeplocal_cfg_${wsId}`, JSON.stringify({
+				theme, fontSize, selectedId, editorMode, openTabs, isWordWrap,
+				sidebarWidth: sidebar ? sidebar.offsetWidth : undefined
+			}));
+		} catch (e) {
+			handleStorageError(e, "saveWsConfig");
+		}
 	}
 	function loadWsConfig(wsId) {
-		const raw = localStorage.getItem(`keeplocal_cfg_${wsId}`);
-		if (raw) {
-			const c = JSON.parse(raw);
-			theme = c.theme || "dark";
-			fontSize = Number.isFinite(Number(c.fontSize))
-				? Number(c.fontSize)
-				: 13;
-			selectedId = c.selectedId || null;
-			editorMode = c.editorMode || "block";
-			openTabs = Array.isArray(c.openTabs) ? c.openTabs : [];
-			isWordWrap = !!c.isWordWrap;
-			if (c.sidebarWidth) {
-				document.documentElement.style.setProperty("--sidebar-width", c.sidebarWidth + "px");
+		try {
+			const raw = localStorage.getItem(`keeplocal_cfg_${wsId}`);
+			if (raw) {
+				const c = JSON.parse(raw);
+				theme = c.theme || "dark";
+				fontSize = Number.isFinite(Number(c.fontSize))
+					? Number(c.fontSize)
+					: 13;
+				selectedId = c.selectedId || null;
+				editorMode = c.editorMode || "block";
+				openTabs = Array.isArray(c.openTabs) ? c.openTabs : [];
+				isWordWrap = !!c.isWordWrap;
+				if (c.sidebarWidth) {
+					document.documentElement.style.setProperty("--sidebar-width", c.sidebarWidth + "px");
+				}
+			} else {
+				openTabs = [];
+				isWordWrap = false;
 			}
-		} else {
+		} catch (e) {
+			console.warn("loadWsConfig:", e);
 			openTabs = [];
 			isWordWrap = false;
 		}
 	}
 
 	function deleteWsData(wsId) {
-		localStorage.removeItem(`keeplocal_files_${wsId}`);
-		localStorage.removeItem(`keeplocal_cfg_${wsId}`);
-		localStorage.removeItem(`keeplocal_deletions_${wsId}`);
+		try {
+			localStorage.removeItem(`keeplocal_files_${wsId}`);
+			localStorage.removeItem(`keeplocal_cfg_${wsId}`);
+			localStorage.removeItem(`keeplocal_deletions_${wsId}`);
+		} catch (_) { }
 		idbDel(`handle_${wsId}`);
+		checkStorageQuota();
 	}
 
 	function queueDiskDeletion(pathParts, name) {
@@ -172,7 +324,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		try {
 			localStorage.setItem(`keeplocal_deletions_${wsId}`, JSON.stringify(pendingDeletions));
 		} catch (e) {
-			console.warn("saveWsDeletions:", e);
+			handleStorageError(e, "saveWsDeletions");
 		}
 	}
 
@@ -595,7 +747,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (selectedId && !findNode(files, selectedId)) selectedId = null;
 
 		// Save active workspace ID so page reload returns here directly
-		localStorage.setItem("keeplocal_active_ws_id", wsId);
+		try {
+			localStorage.setItem("keeplocal_active_ws_id", wsId);
+		} catch (e) {
+			handleStorageError(e, "openWorkspace");
+		}
 
 		// Switch views
 		welcomeScreen.classList.add("hidden");
@@ -610,6 +766,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		updateFolderUI();
 		render();
 		await loadFile();
+		checkStorageQuota();
 
 		if (window.lucide) lucide.createIcons();
 	}
@@ -623,7 +780,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			// update file count
 			updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
 		}
-		localStorage.removeItem("keeplocal_active_ws_id");
+		try {
+			localStorage.removeItem("keeplocal_active_ws_id");
+		} catch (_) { }
 		activeWsId = null;
 		workspaceHandle = null;
 		files = [];
@@ -848,6 +1007,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 			pathBar?.classList.remove("has-folder");
 		}
+		checkStorageQuota();
 		if (window.lucide) lucide.createIcons();
 	}
 
@@ -2399,10 +2559,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 			id: wsId, name: "My Notes", createdAt: Date.now(),
 			lastOpenedAt: Date.now(), folderName: null, fileCount: countAllFiles(migFiles)
 		});
-		localStorage.setItem(`keeplocal_files_${wsId}`, oldFiles);
-		if (oldCfg) localStorage.setItem(`keeplocal_cfg_${wsId}`, oldCfg);
-		localStorage.removeItem("keeplocal_files");
-		localStorage.removeItem("keeplocal_config");
+		try {
+			localStorage.setItem(`keeplocal_files_${wsId}`, oldFiles);
+			if (oldCfg) localStorage.setItem(`keeplocal_cfg_${wsId}`, oldCfg);
+		} catch (e) {
+			handleStorageError(e, "migration");
+		}
+		try {
+			localStorage.removeItem("keeplocal_files");
+			localStorage.removeItem("keeplocal_config");
+		} catch (_) { }
 		saveWorkspaceMeta();
 	}
 

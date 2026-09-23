@@ -215,6 +215,13 @@
 
             <!-- Footer -->
             <div class="workspace-footer">
+                <div id="storageQuotaBanner" class="storage-quota-banner hidden">
+                    <div class="storage-quota-text-wrap">
+                        <i data-lucide="alert-triangle" size="13"></i>
+                        <span id="storageQuotaText">Storage 85% full</span>
+                    </div>
+                    <button class="storage-quota-btn" onclick="saveWorkspace()">Connect</button>
+                </div>
                 <button id="saveWorkspaceBtn" class="save-workspace-btn" onclick="saveWorkspace()">
                     <i data-lucide="hard-drive" size="14"></i>
                     <span>Connect Folder</span>
