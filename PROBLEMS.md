@@ -104,7 +104,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 
 ## 2. File System API & Sync Engine (High)
 
-- [ ] **FS-01: Keystroke Disk-Write Thrashing and Asynchronous I/O Race Conditions**
+- [x] **FS-01: Keystroke Disk-Write Thrashing and Asynchronous I/O Race Conditions** (FIXED)
   - **Severity:** High
   - **Location:** [`js/script.js#L2018-L2023`](file:///home/raja/Workspace/keepLocal/js/script.js#L2018-L2023)
   - **Problem Description:** In the plain text editor, the `input` event listener executes `syncWorkspace()` on **every single keystroke**:

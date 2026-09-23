@@ -1361,7 +1361,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					try {
 						const f = await entry.getFile();
 						const content = await f.text();
-						arr.push({ id: uid("file"), name, type: "file", content });
+						arr.push({ id: uid("file"), name, type: "file", content, _diskContent: content });
 					} catch (e) { console.warn("Skip:", name, e); }
 				}
 			}
@@ -1373,18 +1373,67 @@ document.addEventListener("DOMContentLoaded", async () => {
 	async function writeFile(dirHandle, name, content) {
 		const fh = await dirHandle.getFileHandle(name, { create: true });
 		const w = await fh.createWritable();
-		await w.write(content); await w.close();
+		await w.write(content);
+		await w.close();
 	}
 
 	async function saveNodes(dirHandle, nodes) {
 		for (const n of nodes) {
-			if (n.type === "file") await writeFile(dirHandle, n.name, n.content || "");
-			else { const sub = await dirHandle.getDirectoryHandle(n.name, { create: true }); await saveNodes(sub, n.children || []); }
+			if (n.type === "file") {
+				if (n._diskContent !== n.content) {
+					await writeFile(dirHandle, n.name, n.content || "");
+					n._diskContent = n.content || "";
+				}
+			} else {
+				const sub = await dirHandle.getDirectoryHandle(n.name, { create: true });
+				await saveNodes(sub, n.children || []);
+			}
 		}
 	}
 
-	async function syncWorkspace() {
+	let diskSyncTimer = null;
+	let isSyncing = false;
+	let syncPending = false;
+	let syncWaiters = [];
+
+	function requestDiskSync(delay = 1000) {
 		if (!workspaceHandle) return;
+		clearTimeout(diskSyncTimer);
+		diskSyncTimer = setTimeout(() => {
+			diskSyncTimer = null;
+			performDiskSync();
+		}, delay);
+	}
+
+	async function flushDiskSync() {
+		if (diskSyncTimer) {
+			clearTimeout(diskSyncTimer);
+			diskSyncTimer = null;
+		}
+		if (!workspaceHandle) return;
+		if (isSyncing) {
+			syncPending = true;
+			return new Promise((resolve) => {
+				syncWaiters.push(resolve);
+			});
+		}
+		return performDiskSync();
+	}
+
+	async function performDiskSync() {
+		if (!workspaceHandle) return;
+		if (isSyncing) {
+			syncPending = true;
+			return new Promise((resolve) => {
+				syncWaiters.push(resolve);
+			});
+		}
+
+		isSyncing = true;
+		if (wsStatusBadge && workspaceHandle) {
+			wsStatusBadge.textContent = "Saving…";
+		}
+
 		try {
 			// Process only explicitly tracked deletions (never purge unmanaged disk entries)
 			if (pendingDeletions.length > 0) {
@@ -1409,9 +1458,41 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (activeWsId) saveWsDeletions(activeWsId);
 			}
 
-			// Write managed files to disk
+			// Write managed files to disk (with dirty checking)
 			await saveNodes(workspaceHandle, files);
-		} catch (e) { console.warn("Sync:", e); }
+
+			if (wsStatusBadge && workspaceHandle) {
+				wsStatusBadge.textContent = "Saved ✓";
+				setTimeout(() => {
+					if (workspaceHandle && !isSyncing && !syncPending) {
+						wsStatusBadge.textContent = workspaceHandle.name;
+					}
+				}, 1500);
+			}
+		} catch (e) {
+			console.warn("Sync error:", e);
+		} finally {
+			isSyncing = false;
+			const waiters = [...syncWaiters];
+			syncWaiters = [];
+
+			if (syncPending) {
+				syncPending = false;
+				performDiskSync().then(() => {
+					waiters.forEach(res => res());
+				});
+			} else {
+				waiters.forEach(res => res());
+			}
+		}
+	}
+
+	async function syncWorkspace(immediate = true) {
+		if (immediate) {
+			return flushDiskSync();
+		} else {
+			requestDiskSync(1000);
+		}
 	}
 
 	// ============================================================
@@ -1531,6 +1612,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const newPathParts = newFullPath.slice(0, -1).map(x => x.name);
 		if (oldPathParts.join("/") !== newPathParts.join("/")) {
 			queueDiskDeletion(oldPathParts, src.name);
+			const clearDiskContent = (node) => {
+				delete node._diskContent;
+				if (node.children) node.children.forEach(clearDiskContent);
+			};
+			clearDiskContent(src);
 		}
 
 		persistCurrent(); render(); syncWorkspace();
@@ -1580,6 +1666,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const pathParts = fullPath.slice(0, -1).map(x => x.name);
 			queueDiskDeletion(pathParts, n.name);
 			n.name = newName;
+			delete n._diskContent;
 			persistCurrent(); syncWorkspace(); render();
 		};
 
@@ -2199,7 +2286,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 							f.content = blocksToText(d);
 							if (editorTextarea) editorTextarea.value = f.content;
 							persistCurrent();
-							syncWorkspace();
+							syncWorkspace(false);
 						} catch (_) { }
 					}
 				}, 400);
@@ -2433,7 +2520,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	editorTextarea.addEventListener("input", async () => {
 		const f = findNode(files, selectedId);
-		if (f?.type === "file") { f.content = editorTextarea.value; persistCurrent(); syncWorkspace(); }
+		if (f?.type === "file") {
+			f.content = editorTextarea.value;
+			persistCurrent();
+			syncWorkspace(false);
+		}
 		updateLineNumbers();
 		updateCodeHighlighting();
 	});
