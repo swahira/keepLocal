@@ -41,7 +41,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Permanent, unrecoverable data loss in user project directories.
   - **How to Fix:** Never unconditionally delete unmanaged entries in a connected folder. Only delete an entry on disk if it was an item explicitly deleted by the user inside KeepLocal (e.g. by recording deleted filenames into a `deletedTombstones` set or keeping track of known managed files).
 
-- [ ] **DATA-02: Race Condition and Overwrite When Switching Files/Tabs During EditorJS Debounce**
+- [x] **DATA-02: Race Condition and Overwrite When Switching Files/Tabs During EditorJS Debounce** (FIXED)
   - **Severity:** Critical
   - **Location:** [`js/script.js#L1381-L1389`](file:///home/raja/Workspace/keepLocal/js/script.js#L1381-L1389) (`openTab`), [`js/script.js#L1556`](file:///home/raja/Workspace/keepLocal/js/script.js#L1556), [`js/script.js#L1775-L1791`](file:///home/raja/Workspace/keepLocal/js/script.js#L1775-L1791)
   - **Problem Description:** When clicking another file in the tree, `openTab(node.id)` immediately sets `selectedId = id;` without first calling `autoSaveCurrentFile()`. In Block Mode, `editorInstance.save()` is debounced by 400ms:
@@ -62,7 +62,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
     2. Cancel `clearTimeout(editorSaveTimer)` immediately upon switching tabs.
     3. Bind the active file ID in a closure or pass it explicitly to `editorSaveTimer` so a delayed save cannot write to a newly selected file.
 
-- [ ] **DATA-03: Switching Workspaces via Dropdown Discards Unsaved Changes**
+- [x] **DATA-03: Switching Workspaces via Dropdown Discards Unsaved Changes** (FIXED)
   - **Severity:** Critical
   - **Location:** [`js/script.js#L342-L349`](file:///home/raja/Workspace/keepLocal/js/script.js#L342-L349) & [`js/script.js#L527-L534`](file:///home/raja/Workspace/keepLocal/js/script.js#L527-L534) (`openWorkspace`)
   - **Problem Description:** In `wsDropdownList`, clicking a workspace calls `await openWorkspace(ws.id);`. Inside `openWorkspace`, `activeWsId = wsId;` is set immediately. Unlike `goHome()`, which calls `autoSaveCurrentFile()`, `saveWsFiles(activeWsId)`, and `saveWsConfig(activeWsId)`, `openWorkspace()` performs no flush of the previous workspace's state.
@@ -86,7 +86,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Irreversible loss of notes created prior to folder connection.
   - **How to Fix:** Check if `files.length > 0` before overwriting. If so, display a confirmation modal offering to merge local notes with the folder, keep both, or cancel the connection.
 
-- [ ] **DATA-05: Missing `beforeunload` Handler Loses In-Flight Edits on Tab Close or Refresh**
+- [x] **DATA-05: Missing `beforeunload` Handler Loses In-Flight Edits on Tab Close or Refresh** (FIXED)
   - **Severity:** High
   - **Location:** [`js/script.js`](file:///home/raja/Workspace/keepLocal/js/script.js)
   - **Problem Description:** There is no `window.addEventListener("beforeunload", ...)` handler. If a user edits a note in Block Mode and refreshes the browser tab or closes the window before the 400ms debounce completes, all recently typed characters are lost because they were never flushed to `localStorage`.
@@ -164,12 +164,14 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Folder sync is completely disabled for users running local servers on `0.0.0.0`, with a confusing and inaccurate error message that misidentifies their browser.
   - **How to Fix:**
     1. Detect insecure origins and distinguish between an unsupported browser and an insecure context:
+
        ```javascript
        const isSecure = window.isSecureContext;
        const isChromium = !!(window.chrome || (navigator.userAgentData && navigator.userAgentData.brands?.some(b => ["Chromium", "Google Chrome", "Microsoft Edge", "Brave"].includes(b.brand))));
        ```
+
     2. If the user loads KeepLocal on `0.0.0.0` (`location.hostname === "0.0.0.0"`), automatically suggest or redirect to `http://localhost:${location.port || 8000}` or `http://127.0.0.1:${location.port || 8000}`.
-    3. Update the UI message to accurately explain: *"Folder sync requires a Secure Context. Please access via http://localhost:8000 or http://127.0.0.1:8000 instead of 0.0.0.0."* with a clickable link.
+    3. Update the UI message to accurately explain: *"Folder sync requires a Secure Context. Please access via <http://localhost:8000> or <http://127.0.0.1:8000> instead of 0.0.0.0."* with a clickable link.
 
 ---
 

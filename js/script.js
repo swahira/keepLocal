@@ -553,6 +553,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const ws = workspaces.find(w => w.id === wsId);
 		if (!ws) return;
 
+		// Save current active workspace before opening the new one
+		if (activeWsId && activeWsId !== wsId) {
+			await autoSaveCurrentFile();
+			saveWsFiles(activeWsId);
+			saveWsConfig(activeWsId);
+			updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
+		}
+
 		activeWsId = wsId;
 		ws.lastOpenedAt = Date.now();
 		saveWorkspaceMeta();
@@ -629,13 +637,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 		showWelcome();
 	};
 
-	async function autoSaveCurrentFile() {
-		const f = findNode(files, selectedId);
+	async function autoSaveCurrentFile(targetId = selectedId) {
+		clearTimeout(editorSaveTimer);
+		editorSaveTimer = null;
+		if (!targetId) return;
+		const f = findNode(files, targetId);
 		if (!f || f.type !== "file") return;
 		if (editorMode === "block" && editorInstance) {
-			try { const d = await editorInstance.save(); f.content = blocksToText(d); } catch (_) { }
-		} else {
+			try {
+				const d = await editorInstance.save();
+				f.content = blocksToText(d);
+				if (editorTextarea) editorTextarea.value = f.content;
+			} catch (_) { }
+		} else if (editorTextarea) {
 			f.content = editorTextarea.value;
+		}
+		persistCurrent();
+		if (workspaceHandle) {
+			await syncWorkspace();
 		}
 	}
 
@@ -1058,6 +1077,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	window.saveWorkspace = async function () {
 		if (!supportsFS) { showAlertModal("Not supported", "Requires Chrome, Edge, or Brave."); return; }
+		await autoSaveCurrentFile();
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });
 			const readFiles = await readDirectoryHandle(handle);
@@ -1137,6 +1157,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			showAlertModal("No Folder Connected", "Connect a system folder to enable folder re-syncing.");
 			return;
 		}
+		await autoSaveCurrentFile();
 		try {
 			const perm = await workspaceHandle.requestPermission({ mode: "readwrite" });
 			if (perm !== "granted") { showAlertModal("Permission denied", "Could not access the folder."); return; }
@@ -1245,22 +1266,29 @@ document.addEventListener("DOMContentLoaded", async () => {
 		return { array: p ? p.children : files, node: p };
 	}
 
-	window.addFile = function () {
+	window.addFile = async function () {
+		await autoSaveCurrentFile();
 		const t = getTarget();
 		let name = "untitled.md", c = 1;
 		while (nameExistsInArray(t.array, name)) name = `untitled-${c++}.md`;
 		const nf = { id: uid("file"), name, type: "file", content: "" };
 		t.array.push(nf);
 		if (t.node) t.node.isOpen = true;
+		if (!openTabs.includes(nf.id)) {
+			openTabs.push(nf.id);
+		}
 		selectedId = nf.id;
 		persistCurrent();
 		render();
 		setTimeout(() => beginInlineRename(nf.id), 40);
-		loadFile();
+		await loadFile();
 		syncWorkspace();
 	};
 
-	window.addFolder = function () {
+	window.addFolder = async function () {
+		if (selectedId && findNode(files, selectedId)?.type === "file") {
+			await autoSaveCurrentFile();
+		}
 		const t = getTarget();
 		let name = "New Folder", c = 1;
 		while (nameExistsInArray(t.array, name)) name = `New Folder ${c++}`;
@@ -1290,13 +1318,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 	window.deleteNode = function (id) {
 		const n = findNode(files, id);
 		if (!n) return;
-		showConfirmModal("Delete", `Delete "${n.name}"?`, (ok) => {
+		showConfirmModal("Delete", `Delete "${n.name}"?`, async (ok) => {
 			if (!ok) return;
 			const fullPath = getPath(id);
 			const pathParts = fullPath.slice(0, -1).map(x => x.name);
 			queueDiskDeletion(pathParts, n.name);
 
 			const deletedIds = collectDescendantIds(n);
+			if (deletedIds.has(selectedId)) {
+				clearTimeout(editorSaveTimer);
+				editorSaveTimer = null;
+			}
 			const p = findParent(files, id);
 			if (p) p.children = p.children.filter(c => c.id !== id);
 			else files = files.filter(c => c.id !== id);
@@ -1304,7 +1336,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			openTabs = openTabs.filter(tid => !deletedIds.has(tid));
 			if (deletedIds.has(selectedId)) {
 				selectedId = openTabs.length > 0 ? openTabs[openTabs.length - 1] : null;
-				loadFile();
+				await loadFile();
 			}
 			persistCurrent(); render(); syncWorkspace();
 		}, true);
@@ -1582,19 +1614,36 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// EDITOR TABS (VS Code Style)
 	// ============================================================
-	window.openTab = function (id) {
+	window.openTab = async function (id) {
 		if (!id) return;
+		if (selectedId === id) {
+			if (!openTabs.includes(id)) {
+				openTabs.push(id);
+				renderTabs();
+			}
+			return;
+		}
+		if (selectedId) {
+			await autoSaveCurrentFile();
+		}
 		if (!openTabs.includes(id)) {
 			openTabs.push(id);
 		}
 		selectedId = id;
+		document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
+		const activeEl = fileTreeEl?.querySelector(`[data-id="${id}"]`);
+		if (activeEl) activeEl.classList.add("active");
 		persistCurrent();
 		renderTabs();
+		await loadFile();
+		updateBreadcrumbs();
 	};
 
 	window.closeTab = async function (id, event) {
 		if (event) event.stopPropagation();
-		await autoSaveCurrentFile();
+		if (selectedId === id) {
+			await autoSaveCurrentFile();
+		}
 
 		const idx = openTabs.indexOf(id);
 		if (idx !== -1) {
@@ -1616,15 +1665,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	};
 
 	window.selectTab = async function (id) {
-		if (selectedId === id) return;
-		await autoSaveCurrentFile();
-		selectedId = id;
-		document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
-		const activeEl = fileTreeEl?.querySelector(`[data-id="${id}"]`);
-		if (activeEl) activeEl.classList.add("active");
-		persistCurrent();
-		renderTabs();
-		await loadFile();
+		await openTab(id);
 	};
 
 	function renderTabs() {
@@ -1735,9 +1776,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 			el.appendChild(acts);
 
 			// Click
-			el.onclick = (e) => {
+			el.onclick = async (e) => {
 				if (e.target.closest(".action-btn")) return;
 				if (node.type === "folder") {
+					if (selectedId && selectedId !== node.id) {
+						await autoSaveCurrentFile();
+					}
 					node.isOpen = !node.isOpen;
 					selectedId = node.id;
 					document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
@@ -1757,12 +1801,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					}
 					updateBreadcrumbs();
 				} else {
-					openTab(node.id);
-					document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
-					el.classList.add("active");
-					persistCurrent();
-					loadFile();
-					updateBreadcrumbs();
+					await openTab(node.id);
 				}
 			};
 
@@ -1821,7 +1860,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const span = document.createElement("span");
 			span.className = "breadcrumb-item";
 			span.textContent = n.name;
-			span.onclick = () => { selectedId = n.id; if (n.type === "file") loadFile(); render(); };
+			span.onclick = async () => {
+				if (selectedId === n.id) return;
+				if (n.type === "file") {
+					await openTab(n.id);
+				} else {
+					if (selectedId) await autoSaveCurrentFile();
+					selectedId = n.id;
+					persistCurrent();
+					render();
+				}
+			};
 			breadcrumbEl.appendChild(span);
 		});
 	}
@@ -1979,13 +2028,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 			onChange: async () => {
 				if (isInitEditor) return;
 				clearTimeout(editorSaveTimer);
+				const editingId = selectedId;
 				editorSaveTimer = setTimeout(async () => {
-					const f = findNode(files, selectedId);
+					if (!editingId || selectedId !== editingId) return;
+					const f = findNode(files, editingId);
 					if (f?.type === "file" && editorInstance) {
 						try {
 							const d = await editorInstance.save();
+							if (selectedId !== editingId) return;
 							f.content = blocksToText(d);
-							editorTextarea.value = f.content;
+							if (editorTextarea) editorTextarea.value = f.content;
 							persistCurrent();
 							syncWorkspace();
 						} catch (_) { }
@@ -2302,11 +2354,34 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// FILE TREE DRAG DROP
 	// ============================================================
-	fileTreeEl.addEventListener("click", (e) => {
-		if (e.target === fileTreeEl) { selectedId = null; render(); persistCurrent(); loadFile(); }
+	fileTreeEl.addEventListener("click", async (e) => {
+		if (e.target === fileTreeEl) {
+			if (selectedId) {
+				await autoSaveCurrentFile();
+				selectedId = null;
+				render();
+				persistCurrent();
+				await loadFile();
+			}
+		}
 	});
 	fileTreeEl.ondragover = (e) => e.preventDefault();
 	fileTreeEl.ondrop = () => { if (draggedId) moveNode(draggedId, null); };
+
+	// ============================================================
+	// BEFOREUNLOAD FLUSH
+	// ============================================================
+	window.addEventListener("beforeunload", () => {
+		if (selectedId && editorTextarea) {
+			const f = findNode(files, selectedId);
+			if (f?.type === "file") {
+				if (editorMode === "plain") {
+					f.content = editorTextarea.value;
+					persistCurrent();
+				}
+			}
+		}
+	});
 
 	// ============================================================
 	// INIT
