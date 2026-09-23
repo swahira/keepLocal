@@ -25,6 +25,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	let editorSaveTimer = null;
 	let draggedId = null;
 	let inlineRenameId = null;
+	let pendingDeletions = []; // [{ pathParts: string[], name: string }]
 
 	// ============================================================
 	// DOM REFS
@@ -157,7 +158,31 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function deleteWsData(wsId) {
 		localStorage.removeItem(`keeplocal_files_${wsId}`);
 		localStorage.removeItem(`keeplocal_cfg_${wsId}`);
+		localStorage.removeItem(`keeplocal_deletions_${wsId}`);
 		idbDel(`handle_${wsId}`);
+	}
+
+	function queueDiskDeletion(pathParts, name) {
+		if (!name) return;
+		pendingDeletions.push({ pathParts: [...pathParts], name });
+		if (activeWsId) saveWsDeletions(activeWsId);
+	}
+
+	function saveWsDeletions(wsId) {
+		try {
+			localStorage.setItem(`keeplocal_deletions_${wsId}`, JSON.stringify(pendingDeletions));
+		} catch (e) {
+			console.warn("saveWsDeletions:", e);
+		}
+	}
+
+	function loadWsDeletions(wsId) {
+		try {
+			const raw = localStorage.getItem(`keeplocal_deletions_${wsId}`);
+			pendingDeletions = raw ? JSON.parse(raw) : [];
+		} catch {
+			pendingDeletions = [];
+		}
 	}
 
 	function updateWsMeta(wsId, patch) {
@@ -534,6 +559,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		// Load config for this workspace
 		loadWsConfig(wsId);
+		loadWsDeletions(wsId);
 
 		// Load files (unless already in memory from folder read)
 		if (!skipFileLoad) {
@@ -594,6 +620,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		workspaceHandle = null;
 		files = [];
 		selectedId = null;
+		pendingDeletions = [];
 		// Destroy editor instance to avoid memory leak
 		if (editorInstance) {
 			try { editorInstance.destroy(); } catch (_) { }
@@ -886,6 +913,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const modalConfirmBtns = document.getElementById("modalConfirmButtons");
 	const modalConfirmBtn = document.getElementById("modalConfirmBtn");
 	const modalCancelBtn = document.getElementById("modalCancelBtn");
+	const modalChoiceBtns = document.getElementById("modalChoiceButtons");
 	let modalCb = null;
 
 	function showInputModal(title, def, cb) {
@@ -896,6 +924,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalInputHint.classList.remove("hidden");
 		modalInputHint.innerHTML = "Press <b>Enter</b> to confirm, <b>Esc</b> to cancel";
 		modalConfirmBtns.classList.add("hidden");
+		if (modalChoiceBtns) { modalChoiceBtns.innerHTML = ""; modalChoiceBtns.classList.add("hidden"); }
 		modalOverlay.classList.add("active");
 		setTimeout(() => { modalInput.focus(); modalInput.select(); }, 30);
 		modalCb = cb;
@@ -907,6 +936,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalMessage.classList.remove("hidden");
 		modalInputHint.classList.add("hidden");
 		modalConfirmBtns.classList.remove("hidden");
+		if (modalChoiceBtns) { modalChoiceBtns.innerHTML = ""; modalChoiceBtns.classList.add("hidden"); }
 		modalConfirmBtn.textContent = danger ? "Delete" : "Confirm";
 		modalConfirmBtn.className = danger ? "modal-btn danger" : "modal-btn primary";
 		modalOverlay.classList.add("active");
@@ -920,10 +950,51 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalConfirmBtns.classList.add("hidden");
 		modalInputHint.classList.remove("hidden");
 		modalInputHint.innerHTML = "Press <b>Esc</b> to close";
+		if (modalChoiceBtns) { modalChoiceBtns.innerHTML = ""; modalChoiceBtns.classList.add("hidden"); }
 		modalOverlay.classList.add("active");
 		modalCb = null;
 	}
-	function hideModal() { modalOverlay.classList.remove("active"); modalCb = null; }
+	function showChoiceModal({ title, message, choices, onSelect }) {
+		modalTitle.textContent = title;
+		modalMessage.textContent = message;
+		modalInput.classList.add("hidden");
+		modalMessage.classList.remove("hidden");
+		modalConfirmBtns.classList.add("hidden");
+		modalInputHint.classList.remove("hidden");
+		modalInputHint.innerHTML = "Press <b>Esc</b> to cancel";
+
+		if (modalChoiceBtns) {
+			modalChoiceBtns.innerHTML = "";
+			modalChoiceBtns.classList.remove("hidden");
+
+			choices.forEach(ch => {
+				const btn = document.createElement("button");
+				btn.className = `modal-choice-btn ${ch.primary ? "primary" : ch.danger ? "danger" : ""}`;
+				btn.innerHTML = `
+					<span class="modal-choice-btn-title">${escHtml(ch.label)}</span>
+					${ch.description ? `<span class="modal-choice-btn-desc">${escHtml(ch.description)}</span>` : ""}
+				`;
+				btn.onclick = () => {
+					hideModal();
+					if (onSelect) onSelect(ch.action);
+				};
+				modalChoiceBtns.appendChild(btn);
+			});
+		}
+
+		modalOverlay.classList.add("active");
+		modalCb = (confirmed) => {
+			if (!confirmed && onSelect) onSelect("cancel");
+		};
+	}
+	function hideModal() {
+		modalOverlay.classList.remove("active");
+		if (modalChoiceBtns) {
+			modalChoiceBtns.innerHTML = "";
+			modalChoiceBtns.classList.add("hidden");
+		}
+		modalCb = null;
+	}
 
 	modalInput.addEventListener("keydown", (e) => {
 		if (e.key === "Enter") {
@@ -948,28 +1019,114 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// FILESYSTEM SYNC
 	// ============================================================
+	function mergeFileTrees(baseFolderFiles, localFiles) {
+		const merged = JSON.parse(JSON.stringify(baseFolderFiles));
+
+		function mergeNodes(targetArr, sourceNodes) {
+			for (const src of sourceNodes) {
+				if (src.type === "file") {
+					const existing = targetArr.find(x => x.name.toLowerCase() === src.name.toLowerCase());
+					if (!existing) {
+						targetArr.push(JSON.parse(JSON.stringify(src)));
+					} else if (existing.content !== src.content) {
+						const dot = src.name.lastIndexOf(".");
+						const baseName = dot > 0 ? src.name.slice(0, dot) : src.name;
+						const ext = dot > 0 ? src.name.slice(dot) : "";
+						let counter = 1;
+						let uniqueName = `${baseName} (local)${ext}`;
+						while (nameExistsInArray(targetArr, uniqueName)) {
+							counter++;
+							uniqueName = `${baseName} (local ${counter})${ext}`;
+						}
+						targetArr.push({ ...JSON.parse(JSON.stringify(src)), id: uid("file"), name: uniqueName });
+					}
+				} else if (src.type === "folder") {
+					const existingFolder = targetArr.find(x => x.type === "folder" && x.name.toLowerCase() === src.name.toLowerCase());
+					if (!existingFolder) {
+						targetArr.push(JSON.parse(JSON.stringify(src)));
+					} else {
+						existingFolder.children = existingFolder.children || [];
+						mergeNodes(existingFolder.children, src.children || []);
+					}
+				}
+			}
+		}
+
+		mergeNodes(merged, localFiles);
+		return merged;
+	}
+
 	window.saveWorkspace = async function () {
 		if (!supportsFS) { showAlertModal("Not supported", "Requires Chrome, Edge, or Brave."); return; }
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });
-			workspaceHandle = handle;
-			await idbSet(`handle_${activeWsId}`, handle);
-			updateWsMeta(activeWsId, { folderName: handle.name });
-
 			const readFiles = await readDirectoryHandle(handle);
-			if (readFiles.length > 0) {
-				// Always load the chosen folder's content
-				files = readFiles;
+
+			const finalizeConnection = async (chosenFiles, pushToDisk = false) => {
+				workspaceHandle = handle;
+				await idbSet(`handle_${activeWsId}`, handle);
+				updateWsMeta(activeWsId, { folderName: handle.name, fileCount: countAllFiles(chosenFiles) });
+				files = chosenFiles;
 				saveWsFiles(activeWsId);
-			} else {
-				// Empty folder: push existing local files to it
-				await saveNodes(handle, files);
+				if (pushToDisk) {
+					await saveNodes(handle, files);
+				}
+				updateFolderUI();
+				render();
+				if (!selectedId || !findNode(files, selectedId)) {
+					selectedId = findFirstFile(files)?.id || null;
+				}
+				await loadFile();
+			};
+
+			const localFileCount = countAllFiles(files);
+			const folderFileCount = countAllFiles(readFiles);
+
+			// Case 1: Folder has files AND local workspace has existing notes -> Smart Prompt
+			if (localFileCount > 0 && folderFileCount > 0) {
+				showChoiceModal({
+					title: "Connect Folder: Existing Files Detected",
+					message: `The folder "${handle.name}" contains ${folderFileCount} note${folderFileCount === 1 ? "" : "s"}, but your workspace already has ${localFileCount} local note${localFileCount === 1 ? "" : "s"}. What would you like to do?`,
+					choices: [
+						{
+							label: "Merge Notes (Recommended)",
+							description: "Keep both: copy local notes into the folder and import folder notes.",
+							action: "merge",
+							primary: true
+						},
+						{
+							label: "Use Folder Notes Only",
+							description: "Replace current local notes with the files from the chosen folder.",
+							action: "replace",
+							danger: true
+						},
+						{
+							label: "Cancel",
+							description: "Do not connect this folder. Pick an empty folder if you want a clean sync.",
+							action: "cancel"
+						}
+					],
+					onSelect: async (action) => {
+						if (action === "merge") {
+							const merged = mergeFileTrees(readFiles, files);
+							await finalizeConnection(merged, true /* push local notes to folder */);
+						} else if (action === "replace") {
+							await finalizeConnection(readFiles, false);
+						}
+					}
+				});
+				return;
 			}
 
-			updateFolderUI();
-			render();
-			if (!selectedId) { selectedId = findFirstFile(files)?.id || null; }
-			await loadFile();
+			// Case 2: Folder is empty -> push local files to it
+			if (folderFileCount === 0) {
+				await finalizeConnection(files, true);
+				return;
+			}
+
+			// Case 3: Local workspace is empty -> load folder's files
+			await finalizeConnection(readFiles, false);
+
 		} catch (err) {
 			if (err.name !== "AbortError") showAlertModal("Error", err.message);
 		}
@@ -1048,15 +1205,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 	async function syncWorkspace() {
 		if (!workspaceHandle) return;
 		try {
-			// Clean disk directory to mirror deleted/removed items in UI state
-			const activeNames = new Set(files.map(f => f.name));
-			for await (const [name] of workspaceHandle.entries()) {
-				if (!activeNames.has(name) && !name.startsWith(".")) {
+			// Process only explicitly tracked deletions (never purge unmanaged disk entries)
+			if (pendingDeletions.length > 0) {
+				const remaining = [];
+				for (const item of pendingDeletions) {
 					try {
-						await workspaceHandle.removeEntry(name, { recursive: true });
-					} catch (err) { console.warn("Could not remove entry:", name, err); }
+						let dir = workspaceHandle;
+						for (const part of item.pathParts) {
+							dir = await dir.getDirectoryHandle(part, { create: false });
+						}
+						await dir.removeEntry(item.name, { recursive: true });
+					} catch (err) {
+						if (err.name !== "NotFoundError") {
+							console.warn("Could not remove entry from disk:", item, err);
+							if (err.name === "NotAllowedError") {
+								remaining.push(item);
+							}
+						}
+					}
 				}
+				pendingDeletions = remaining;
+				if (activeWsId) saveWsDeletions(activeWsId);
 			}
+
+			// Write managed files to disk
 			await saveNodes(workspaceHandle, files);
 		} catch (e) { console.warn("Sync:", e); }
 	}
@@ -1107,15 +1279,33 @@ document.addEventListener("DOMContentLoaded", async () => {
 		setTimeout(() => beginInlineRename(id), 30);
 	};
 
+	function collectDescendantIds(node, set = new Set()) {
+		set.add(node.id);
+		if (node.children) {
+			for (const child of node.children) collectDescendantIds(child, set);
+		}
+		return set;
+	}
+
 	window.deleteNode = function (id) {
 		const n = findNode(files, id);
 		if (!n) return;
 		showConfirmModal("Delete", `Delete "${n.name}"?`, (ok) => {
 			if (!ok) return;
+			const fullPath = getPath(id);
+			const pathParts = fullPath.slice(0, -1).map(x => x.name);
+			queueDiskDeletion(pathParts, n.name);
+
+			const deletedIds = collectDescendantIds(n);
 			const p = findParent(files, id);
 			if (p) p.children = p.children.filter(c => c.id !== id);
 			else files = files.filter(c => c.id !== id);
-			if (selectedId === id) { selectedId = null; loadFile(); }
+
+			openTabs = openTabs.filter(tid => !deletedIds.has(tid));
+			if (deletedIds.has(selectedId)) {
+				selectedId = openTabs.length > 0 ? openTabs[openTabs.length - 1] : null;
+				loadFile();
+			}
 			persistCurrent(); render(); syncWorkspace();
 		}, true);
 	};
@@ -1128,6 +1318,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const hasD = (ns, id) => ns.some(n => n.id === id || (n.children && hasD(n.children, id)));
 			if (hasD(src.children, tgtId)) return;
 		}
+
+		const oldFullPath = getPath(srcId);
+		const oldPathParts = oldFullPath.slice(0, -1).map(x => x.name);
+
 		const op = findParent(files, srcId);
 		if (op) op.children = op.children.filter(n => n.id !== srcId);
 		else files = files.filter(n => n.id !== srcId);
@@ -1140,6 +1334,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 			arr.push(src);
 			if (tp) tp.isOpen = true;
 		}
+
+		const newFullPath = getPath(srcId);
+		const newPathParts = newFullPath.slice(0, -1).map(x => x.name);
+		if (oldPathParts.join("/") !== newPathParts.join("/")) {
+			queueDiskDeletion(oldPathParts, src.name);
+		}
+
 		persistCurrent(); render(); syncWorkspace();
 	};
 
@@ -1183,6 +1384,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 				showAlertModal("Duplicate name", `"${newName}" already exists here.`);
 				render(); return;
 			}
+			const fullPath = getPath(id);
+			const pathParts = fullPath.slice(0, -1).map(x => x.name);
+			queueDiskDeletion(pathParts, n.name);
 			n.name = newName;
 			persistCurrent(); syncWorkspace(); render();
 		};

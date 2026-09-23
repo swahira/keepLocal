@@ -1520,6 +1520,75 @@ button {
 	background: var(--danger-hover);
 }
 
+/* Modal Choice Option Buttons (Smart Prompt) */
+.modal-choices {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin-top: 14px;
+}
+
+.modal-choice-btn {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	padding: 10px 14px;
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius);
+	background: var(--bg-secondary);
+	color: var(--text-primary);
+	cursor: pointer;
+	text-align: left;
+	font-family: inherit;
+	transition: all var(--transition);
+	width: 100%;
+}
+
+.modal-choice-btn:hover {
+	border-color: var(--accent-color);
+	background: var(--hover-bg);
+}
+
+.modal-choice-btn.primary {
+	border-color: var(--accent-border);
+	background: var(--active-bg);
+}
+
+.modal-choice-btn.primary:hover {
+	border-color: var(--accent-color);
+	background: var(--accent-dim);
+}
+
+.modal-choice-btn.danger {
+	border-color: var(--border-color);
+}
+
+.modal-choice-btn.danger:hover {
+	border-color: var(--danger);
+	background: rgba(239, 68, 68, 0.08);
+}
+
+.modal-choice-btn-title {
+	font-size: 13.5px;
+	font-weight: 600;
+	color: var(--text-primary);
+}
+
+.modal-choice-btn.primary .modal-choice-btn-title {
+	color: var(--accent-color);
+}
+
+.modal-choice-btn.danger:hover .modal-choice-btn-title {
+	color: var(--danger);
+}
+
+.modal-choice-btn-desc {
+	font-size: 11.5px;
+	color: var(--text-muted);
+	margin-top: 3px;
+	line-height: 1.35;
+}
+
 /* ============================================================
    CONTEXT MENU
    ============================================================ */
