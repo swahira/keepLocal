@@ -1983,6 +1983,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const commit = () => {
 			if (isCancelled) return;
 			inlineRenameId = null;
+			const newName = input.value.trim();
 			if (!newName || newName === n.name) { render(); return; }
 			if (newName === "." || newName === ".." || /[\\/:*?"<>|]/.test(newName)) {
 				showAlertModal("Invalid name", "Names cannot be '.' or '..' and cannot contain any of the following characters: \\ / : * ? \" < > |");
@@ -2875,7 +2876,43 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const ListTool = typeof NestedList !== "undefined" ? NestedList : (typeof List !== "undefined" ? List : null);
 		if (ListTool) tools.list = { class: ListTool, inlineToolbar: true };
 		if (typeof Checklist !== "undefined") tools.checklist = { class: Checklist, inlineToolbar: true };
-		if (typeof Quote !== "undefined") tools.quote = { class: Quote, inlineToolbar: true };
+		if (typeof Quote !== "undefined") {
+			class CustomQuoteTool extends Quote {
+				render() {
+					const container = super.render();
+					const textEl = container.querySelector(`.${this.css.text}`);
+					const captionEl = container.querySelector(`.${this.css.caption}`);
+
+					const handleKeydown = (e) => {
+						if (e.key === "Enter" && !e.shiftKey) {
+							e.preventDefault();
+							document.execCommand("insertLineBreak");
+							return;
+						}
+						if (e.key === "Backspace") {
+							const targetEl = e.currentTarget;
+							const sel = window.getSelection();
+							if (!sel || !sel.rangeCount) return;
+							const range = sel.getRangeAt(0);
+							try {
+								const preRange = document.createRange();
+								preRange.setStart(targetEl, 0);
+								preRange.setEnd(range.startContainer, range.startOffset);
+								const preText = preRange.toString();
+								if (preText.length > 0 || (range.startContainer !== targetEl && targetEl.firstChild && range.startContainer !== targetEl.firstChild)) {
+									e.stopPropagation();
+								}
+							} catch (_) { }
+						}
+					};
+
+					textEl?.addEventListener("keydown", handleKeydown, true);
+					captionEl?.addEventListener("keydown", handleKeydown, true);
+					return container;
+				}
+			}
+			tools.quote = { class: CustomQuoteTool, inlineToolbar: true };
+		}
 		if (typeof Warning !== "undefined") {
 			class CustomWarningTool extends Warning {
 				static get toolbox() {
@@ -3006,6 +3043,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				}, 400);
 			}
 		});
+		window.editorInstance = editorInstance;
 	}
 
 	async function loadFile() {
