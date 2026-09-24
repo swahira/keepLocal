@@ -283,7 +283,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 
 ## 4. Markdown & Block Editor (Editor.js) Bridge (Medium)
 
-- [ ] **MD-01: Cross-Site Scripting (XSS) Vulnerability in Markdown Link & Image Parsing**
+- [x] **MD-01: Cross-Site Scripting (XSS) Vulnerability in Markdown Link & Image Parsing** (FIXED)
   - **Severity:** Critical / Security
   - **Location:** [`js/script.js#L1675-L1686`](file:///home/raja/Workspace/keepLocal/js/script.js#L1675-L1686) (`md2h`)
   - **Problem Description:** `md2h()` uses naive regex replacements without HTML escaping or URL scheme validation:
@@ -297,28 +297,28 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Arbitrary JavaScript execution when opening untrusted or imported notes.
   - **How to Fix:** Escape HTML entities (`&`, `<`, `>`, `"`) before applying formatting, and validate that URL protocols are restricted to `http:`, `https:`, `mailto:`, or relative anchors.
 
-- [ ] **MD-02: Code Block Language Identifiers Discarded in Conversion**
+- [x] **MD-02: Code Block Language Identifiers Discarded in Conversion** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1643-L1645`](file:///home/raja/Workspace/keepLocal/js/script.js#L1643-L1645) & [`js/script.js#L1722`](file:///home/raja/Workspace/keepLocal/js/script.js#L1722)
   - **Problem Description:** When parsing markdown into blocks, `if (line.trim().startsWith("```"))` ignores everything after the triple backticks. The language tag (e.g. ```` ```python ````) is discarded. When converting back via `blocksToText`, line 1722 always outputs plain ```` ``` ```` without a language identifier.
   - **Impact:** Permanent loss of syntax highlighting language metadata in code blocks.
   - **How to Fix:** Extract the language tag `line.trim().slice(3).trim()` in `textToBlocks`, store it in the block data, and restore it in `blocksToText`.
 
-- [ ] **MD-03: Nested Lists Flattened During `textToBlocks` Conversion**
+- [x] **MD-03: Nested Lists Flattened During `textToBlocks` Conversion** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1647`](file:///home/raja/Workspace/keepLocal/js/script.js#L1647) & [`js/script.js#L1659-L1668`](file:///home/raja/Workspace/keepLocal/js/script.js#L1659-L1668)
   - **Problem Description:** `const t = line.trim();` strips all leading spaces from every line before parsing list markers. Indented sub-items (e.g. `- Sub item`) lose their indentation and are pushed as flat root items.
   - **Impact:** Nested list structures are completely destroyed upon switching between raw and block editor modes.
   - **How to Fix:** Preserve leading whitespace count in `textToBlocks` and build a nested tree structure for `@editorjs/nested-list`.
 
-- [ ] **MD-04: Tables Always Forced to Have Headers in `blocksToText`**
+- [x] **MD-04: Tables Always Forced to Have Headers in `blocksToText`** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1638`](file:///home/raja/Workspace/keepLocal/js/script.js#L1638) & [`js/script.js#L1723`](file:///home/raja/Workspace/keepLocal/js/script.js#L1723)
   - **Problem Description:** `flushTable()` always sets `withHeadings: true`. In `blocksToText`, line 1723 unconditionally injects `| --- | --- |` under row 0, even for tables that had no headers.
   - **Impact:** Corrupted table markdown format and inability to create header-less tables.
   - **How to Fix:** Check whether row 1 contains markdown delimiter dashes (`:?---+:?`) before setting `withHeadings: true`. Only emit the separator line in `blocksToText` if `withHeadings` is true.
 
-- [ ] **MD-05: Unescaped Folder Name in Workspace Cards (DOM XSS)**
+- [x] **MD-05: Unescaped Folder Name in Workspace Cards (DOM XSS)** (FIXED)
   - **Severity:** Medium / Security
   - **Location:** [`js/script.js#L218-L220`](file:///home/raja/Workspace/keepLocal/js/script.js#L218-L220)
   - **Problem Description:** While `ws.name` is escaped via `escHtml()`, `ws.folderName` is inserted into `card.innerHTML` unescaped:

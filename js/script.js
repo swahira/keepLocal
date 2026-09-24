@@ -397,7 +397,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			const relTime = timeAgo(ws.lastOpenedAt || ws.createdAt);
 			const folderBadge = ws.folderName
-				? `<span class="ws-card-badge folder-badge"><i data-lucide="folder" size="10"></i>${ws.folderName}</span>`
+				? `<span class="ws-card-badge folder-badge"><i data-lucide="folder" size="10"></i>${escHtml(ws.folderName)}</span>`
 				: `<span class="ws-card-badge local-badge"><i data-lucide="hard-drive" size="10"></i>Local</span>`;
 
 			card.innerHTML = `
@@ -2368,48 +2368,129 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// EDITOR.JS MARKDOWN BRIDGE
 	// ============================================================
+	// EDITOR.JS MARKDOWN BRIDGE
+	// ============================================================
+	function sanitizeUrl(url) {
+		if (!url) return "#";
+		const trimmed = url.trim();
+		// Allow safe web schemes and relative anchors/paths
+		if (/^(?:(?:https?|mailto|tel):|\/|\.\/|\.\.\/|#)/i.test(trimmed)) {
+			return trimmed;
+		}
+		// Allow image data URIs
+		if (/^data:image\/(?:png|jpeg|jpg|gif|svg\+xml|webp);base64,[A-Za-z0-9+/=]+$/i.test(trimmed)) {
+			return trimmed;
+		}
+		return "#";
+	}
+
 	function textToBlocks(text) {
 		if (!text?.trim()) return [{ type: "paragraph", data: { text: "" } }];
 		const lines = text.split("\n");
 		const blocks = [];
-		let inCode = false, codeBuf = [], tableBuf = [];
+		let inCode = false, codeBuf = [], tableBuf = [], currentCodeLang = "";
+		let listStack = [];
 
-		const flushCode = () => { if (codeBuf.length) { blocks.push({ type: "code", data: { code: codeBuf.join("\n") } }); codeBuf = []; } };
+		const flushCode = () => {
+			if (codeBuf.length || inCode) {
+				blocks.push({
+					type: "code",
+					data: {
+						code: codeBuf.join("\n"),
+						language: currentCodeLang || ""
+					}
+				});
+				codeBuf = [];
+				currentCodeLang = "";
+			}
+		};
 		const flushTable = () => {
 			if (!tableBuf.length) return;
-			const content = tableBuf.map(r => r.split("|").slice(1, -1).map(c => c.trim())).filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c)));
-			if (content.length) blocks.push({ type: "table", data: { content, withHeadings: true } });
+			// Check if table contains a markdown header separator row, e.g. | --- | --- | (MD-04)
+			const hasHeaderSep = tableBuf.length > 1 && tableBuf[1].split("|").slice(1, -1).every(c => /^:?-+:?$/.test(c.trim()));
+			const content = tableBuf
+				.map(r => r.split("|").slice(1, -1).map(c => c.trim()))
+				.filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c)));
+			if (content.length) {
+				blocks.push({ type: "table", data: { content, withHeadings: hasHeaderSep } });
+			}
 			tableBuf = [];
 		};
 
 		for (const line of lines) {
-			if (line.trim().startsWith("```")) { inCode ? (inCode = false, flushCode()) : (flushTable(), inCode = true); continue; }
+			if (line.trim().startsWith("```")) {
+				listStack = [];
+				if (inCode) {
+					inCode = false;
+					flushCode();
+				} else {
+					flushTable();
+					inCode = true;
+					currentCodeLang = line.trim().slice(3).trim(); // MD-02
+				}
+				continue;
+			}
 			if (inCode) { codeBuf.push(line); continue; }
-			if (line.trim().startsWith("|") && line.trim().endsWith("|")) { tableBuf.push(line.trim()); continue; }
+			if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+				listStack = [];
+				tableBuf.push(line.trim());
+				continue;
+			}
 			flushTable();
 			const t = line.trim();
-			if (!t) { blocks.push({ type: "paragraph", data: { text: "" } }); continue; }
-			if (t.startsWith("#### ")) blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } });
-			else if (t.startsWith("### ")) blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } });
-			else if (t.startsWith("## ")) blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } });
-			else if (t.startsWith("# ")) blocks.push({ type: "header", data: { text: md2h(t.slice(2)), level: 1 } });
-			else if (t.startsWith("> ")) blocks.push({ type: "quote", data: { text: md2h(t.slice(2)), caption: "" } });
-			else if (/^- \[[ xX]\] /.test(t)) {
-				const checked = t[3].toLowerCase() === "x", text = md2h(t.slice(6)), last = blocks[blocks.length - 1];
+			if (!t) {
+				listStack = [];
+				blocks.push({ type: "paragraph", data: { text: "" } });
+				continue;
+			}
+
+			if (t.startsWith("#### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } }); }
+			else if (t.startsWith("### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } }); }
+			else if (t.startsWith("## ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } }); }
+			else if (t.startsWith("# ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(2)), level: 1 } }); }
+			else if (t.startsWith("> ")) { listStack = []; blocks.push({ type: "quote", data: { text: md2h(t.slice(2)), caption: "" } }); }
+			else if (/^[ \t]*- \[[ xX]\] /.test(line)) {
+				listStack = [];
+				const checkMatch = line.match(/^[ \t]*- \[([ xX])\]\s*(.*)/);
+				const checked = checkMatch[1].toLowerCase() === "x";
+				const text = md2h(checkMatch[2]);
+				const last = blocks[blocks.length - 1];
 				if (last?.type === "checklist") last.data.items.push({ text, checked });
 				else blocks.push({ type: "checklist", data: { items: [{ text, checked }] } });
 			}
-			else if (t.startsWith("- ") || t.startsWith("* ")) {
-				const text = md2h(t.slice(2)), last = blocks[blocks.length - 1];
-				if (last?.type === "list") last.data.items.push({ content: text, items: [] });
-				else blocks.push({ type: "list", data: { style: "unordered", items: [{ content: text, items: [] }] } });
+			else {
+				// Check for unordered list (- or * or +) or ordered list (1. 2. etc.) (MD-03)
+				const ulMatch = line.match(/^([ \t]*)[-*+]\s+(.*)/);
+				const olMatch = line.match(/^([ \t]*)\d+\.\s+(.*)/);
+				if (ulMatch || olMatch) {
+					const isOrdered = !!olMatch;
+					const match = olMatch || ulMatch;
+					const rawIndent = match[1].replace(/\t/g, "  ").length;
+					const content = md2h(match[2]);
+					const style = isOrdered ? "ordered" : "unordered";
+
+					let lastBlock = blocks[blocks.length - 1];
+					if (!lastBlock || lastBlock.type !== "list") {
+						lastBlock = { type: "list", data: { style, items: [] } };
+						blocks.push(lastBlock);
+						listStack = [];
+					}
+
+					const newItem = { content, items: [] };
+					while (listStack.length > 0 && listStack[listStack.length - 1].indent >= rawIndent) {
+						listStack.pop();
+					}
+					if (listStack.length === 0) {
+						lastBlock.data.items.push(newItem);
+					} else {
+						listStack[listStack.length - 1].item.items.push(newItem);
+					}
+					listStack.push({ indent: rawIndent, item: newItem });
+				} else {
+					listStack = [];
+					blocks.push({ type: "paragraph", data: { text: md2h(line) } });
+				}
 			}
-			else if (/^\d+\. /.test(t)) {
-				const text = md2h(t.replace(/^\d+\. /, "")), last = blocks[blocks.length - 1];
-				if (last?.type === "list") last.data.items.push({ content: text, items: [] });
-				else blocks.push({ type: "list", data: { style: "ordered", items: [{ content: text, items: [] }] } });
-			}
-			else blocks.push({ type: "paragraph", data: { text: md2h(line) } });
 		}
 		flushCode(); flushTable();
 		return blocks.length ? blocks : [{ type: "paragraph", data: { text: "" } }];
@@ -2417,10 +2498,20 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	function md2h(s) {
 		if (!s) return "";
-		// Convert Markdown image links [![alt](img)](url) -> <a href="url"><img src="img" alt="alt"/></a>
-		let res = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%; border-radius:6px; margin:4px 0;" />');
+		// Escape raw HTML entities first to prevent raw HTML/script injection (MD-01)
+		let res = escHtml(s);
+		// Convert Markdown image links ![alt](url)
+		res = res.replace(/!\[([^\]]*)\]\(((?:[^()]+|\([^()]*\))+)\)/g, (match, alt, url) => {
+			const safeUrl = sanitizeUrl(url);
+			if (safeUrl === "#") return alt;
+			return `<img src="${safeUrl}" alt="${alt}" style="max-width:100%; border-radius:6px; margin:4px 0;" />`;
+		});
 		// Convert Markdown links [text](url) -> <a href="url" target="_blank" rel="noopener">text</a>
-		res = res.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+		res = res.replace(/\[([^\]]+)\]\(((?:[^()]+|\([^()]*\))+)\)/g, (match, text, url) => {
+			const safeUrl = sanitizeUrl(url);
+			if (safeUrl === "#") return `<a href="#" rel="noopener" onclick="return false;">${text}</a>`;
+			return `<a href="${safeUrl}" target="_blank" rel="noopener">${text}</a>`;
+		});
 		// Convert bold, italic, code
 		res = res.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/__(.*?)__/g, "<b>$1</b>")
 			.replace(/\*(.*?)\*/g, "<i>$1</i>").replace(/_(.*?)_/g, "<i>$1</i>")
@@ -2433,13 +2524,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 		return s
 			.replace(/<img[^>]*src="(.*?)"[^>]*alt="(.*?)"[^>]*>/gi, "![$2]($1)")
 			.replace(/<img[^>]*src="(.*?)"[^>]*>/gi, "![]($1)")
-			.replace(/<a [^>]*href="(.*?)"[^>]*>(.*?)<\/a>/gi, "[$2]($1)")
+			.replace(/<a [^>]*href="(.*?)"[^>]*>(.*?)<\/a>/gi, (match, url, text) => {
+				if (url === "#") return text;
+				return `[${text}](${url})`;
+			})
 			.replace(/<b>(.*?)<\/b>/gi, "**$1**").replace(/<strong>(.*?)<\/strong>/gi, "**$1**")
 			.replace(/<i>(.*?)<\/i>/gi, "*$1*").replace(/<em>(.*?)<\/em>/gi, "*$1*")
 			.replace(/<code[^>]*>(.*?)<\/code>/gi, "`$1`")
-			.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+			.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
 			.replace(/<[^>]+>/g, "");
 	}
+
 	function blocksToText(data) {
 		if (!data?.blocks) return "";
 		const lines = [];
@@ -2462,8 +2557,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 					break;
 				case "checklist": (b.data.items || []).forEach(it => lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`)); break;
 				case "quote": lines.push(`> ${h2md(b.data.text)}`); break;
-				case "code": lines.push("```", b.data.code || "", "```"); break;
-				case "table": if (b.data.content?.length) { b.data.content.forEach((r, i) => { lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`); if (i === 0) lines.push(`| ${r.map(() => "---").join(" | ")} |`); }); } break;
+				case "code":
+					const lang = b.data?.language ? b.data.language.trim() : "";
+					lines.push(`\`\`\`${lang}`, b.data?.code || "", "```");
+					break;
+				case "table":
+					if (b.data.content?.length) {
+						const withHeadings = b.data.withHeadings !== false;
+						b.data.content.forEach((r, i) => {
+							lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`);
+							if (i === 0 && withHeadings) {
+								lines.push(`| ${r.map(() => "---").join(" | ")} |`);
+							}
+						});
+					}
+					break;
 				default: if (b.data?.text) { lines.push(h2md(b.data.text)); } break;
 			}
 		}
@@ -2505,7 +2613,44 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (ListTool) tools.list = { class: ListTool, inlineToolbar: true };
 		if (typeof Checklist !== "undefined") tools.checklist = { class: Checklist, inlineToolbar: true };
 		if (typeof Quote !== "undefined") tools.quote = { class: Quote, inlineToolbar: true };
-		if (typeof CodeTool !== "undefined") tools.code = { class: CodeTool };
+		if (typeof CodeTool !== "undefined") {
+			class CustomCodeTool extends CodeTool {
+				constructor({ data, config, api, readOnly }) {
+					super({ data, config, api, readOnly });
+					this._language = data && data.language ? data.language : "";
+				}
+				render() {
+					const container = document.createElement("div");
+					container.className = "ce-code-wrapper";
+					const textarea = super.render();
+
+					const langInput = document.createElement("input");
+					langInput.className = "ce-code__lang-input";
+					langInput.placeholder = "Language (e.g. js, python)";
+					langInput.value = this._language || "";
+					langInput.spellcheck = false;
+					langInput.addEventListener("input", (e) => {
+						this._language = e.target.value.trim();
+					});
+
+					container.appendChild(langInput);
+					container.appendChild(textarea);
+					return container;
+				}
+				save(blockContent) {
+					const res = super.save(blockContent);
+					const langInput = blockContent.querySelector(".ce-code__lang-input");
+					if (langInput) {
+						this._language = langInput.value.trim();
+					}
+					if (this._language) {
+						res.language = this._language;
+					}
+					return res;
+				}
+			}
+			tools.code = { class: CustomCodeTool };
+		}
 		if (typeof InlineCode !== "undefined") tools.inlineCode = { class: InlineCode };
 		if (typeof Table !== "undefined") tools.table = { class: Table, inlineToolbar: true, config: { rows: 2, cols: 2 } };
 

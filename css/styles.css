@@ -1159,6 +1159,32 @@ button {
 }
 
 /* Code blocks */
+.editorjs-wrapper .ce-code-wrapper {
+	position: relative;
+	margin: 6px 0;
+}
+
+.editorjs-wrapper .ce-code__lang-input {
+	display: block;
+	width: auto;
+	max-width: 180px;
+	padding: 4px 8px;
+	margin-bottom: 6px;
+	font-family: var(--font-mono, monospace);
+	font-size: 11px;
+	color: var(--text-secondary);
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	outline: none;
+	transition: border-color var(--transition);
+}
+
+.editorjs-wrapper .ce-code__lang-input:focus {
+	border-color: var(--accent);
+	color: var(--text-primary);
+}
+
 .editorjs-wrapper .ce-code__textarea,
 .editorjs-wrapper .ce-rawtool__textarea,
 .editorjs-wrapper .ce-rawinput {
