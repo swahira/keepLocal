@@ -53,8 +53,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const editorEmptyState = document.getElementById("editorEmptyState");
 	const lineNumbersEl = document.getElementById("lineNumbers");
 	const editorTextarea = document.getElementById("editor");
+	const modeSwitchGroup = document.getElementById("modeSwitchGroup");
 	const modeBlockBtn = document.getElementById("modeBlockBtn");
 	const modePlainBtn = document.getElementById("modePlainBtn");
+
+	function isMarkdownFile(filename) {
+		if (!filename) return false;
+		const ext = filename.split(".").pop()?.toLowerCase();
+		return ext === "md" || ext === "markdown";
+	}
 
 	// ============================================================
 	// FEATURE DETECTION
@@ -932,7 +939,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (!idToSave) return;
 		const f = findNode(files, idToSave);
 		if (!f || f.type !== "file") return;
-		if (editorMode === "block" && editorInstance) {
+		const isMarkdown = isMarkdownFile(f.name);
+		if (editorMode === "block" && isMarkdown && editorInstance) {
 			try {
 				const d = await editorInstance.save();
 				f.content = blocksToText(d);
@@ -1056,14 +1064,29 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function updateEditorModeUI() {
-		const hasFile = !!(selectedId && findNode(files, selectedId)?.type === "file");
+		const f = selectedId ? findNode(files, selectedId) : null;
+		const hasFile = !!(f && f.type === "file");
+		const isMarkdown = hasFile && isMarkdownFile(f.name);
+
+		if (modeSwitchGroup) {
+			if (isMarkdown) {
+				modeSwitchGroup.classList.remove("hidden");
+			} else {
+				modeSwitchGroup.classList.add("hidden");
+			}
+		}
+
 		if (editorMode === "block") {
 			modeBlockBtn?.classList.add("active");
 			modePlainBtn?.classList.remove("active");
-			if (hasFile) {
+			if (hasFile && isMarkdown) {
 				editorjsWrapper?.classList.remove("hidden");
 				plainWrapper?.classList.add("hidden");
 				if (editorStatusSpan) editorStatusSpan.textContent = "Block Mode";
+			} else if (hasFile) {
+				plainWrapper?.classList.remove("hidden");
+				editorjsWrapper?.classList.add("hidden");
+				if (editorStatusSpan) editorStatusSpan.textContent = "Raw Text";
 			}
 		} else {
 			modePlainBtn?.classList.add("active");
@@ -2017,6 +2040,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			n.name = newName;
 			delete n._diskContent;
 			persistCurrent(); syncWorkspace(); render();
+			if (selectedId === id && n.type === "file") {
+				loadFile();
+			}
 		};
 
 		input.addEventListener("blur", commit);
@@ -2851,6 +2877,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// EDITOR.JS
 	// ============================================================
 	window.switchEditorMode = async function (mode) {
+		const f = selectedId ? findNode(files, selectedId) : null;
+		const hasFile = !!(f && f.type === "file");
+		const isMarkdown = hasFile && isMarkdownFile(f?.name);
+		if (!isMarkdown) return;
 		if (editorMode === mode) return;
 		await autoSaveCurrentFile();
 		editorMode = mode;
@@ -3078,13 +3108,18 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			const codeEl = document.getElementById("codeHighlightContent");
 			if (codeEl) codeEl.innerHTML = ""; // prevent stale highlight flash
-			const ext = file.name.split(".").pop()?.toLowerCase();
-			const isMarkdown = ext === "md" || ext === "markdown" || ext === "txt" || !ext;
+			const isMarkdown = isMarkdownFile(file.name);
+
+			if (modeSwitchGroup) {
+				if (isMarkdown) {
+					modeSwitchGroup.classList.remove("hidden");
+				} else {
+					modeSwitchGroup.classList.add("hidden");
+				}
+			}
 
 			if (!isMarkdown) {
-				// Code files (.html, .json, .js, .css, .py, etc.) must open in Raw mode to protect code structure
-				editorMode = "plain";
-				updateEditorModeUI();
+				// Code / non-markdown files must open in Raw mode to protect code structure
 				if (modeBlockBtn) modeBlockBtn.disabled = true;
 			} else {
 				if (modeBlockBtn) modeBlockBtn.disabled = false;
@@ -3102,7 +3137,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				editorjsWrapper.classList.add("hidden");
 			}
 			editorLoadedFileId = file.id;
-			if (editorStatusSpan) editorStatusSpan.textContent = editorMode === "block" ? "Block Mode" : "Raw Text";
+			if (editorStatusSpan) editorStatusSpan.textContent = (editorMode === "block" && isMarkdown) ? "Block Mode" : "Raw Text";
 		} else {
 			if (editorEmptyState) {
 				editorEmptyState.classList.remove("hidden");
@@ -3110,6 +3145,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 			editorjsWrapper?.classList.add("hidden");
 			plainWrapper?.classList.add("hidden");
+			if (modeSwitchGroup) modeSwitchGroup.classList.add("hidden");
 			if (modeBlockBtn) modeBlockBtn.disabled = true;
 			if (modePlainBtn) modePlainBtn.disabled = true;
 			editorTextarea.value = "";
@@ -3531,7 +3567,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (targetId && editorTextarea) {
 			const f = findNode(files, targetId);
 			if (f?.type === "file") {
-				if (editorMode === "plain") {
+				const isMarkdown = isMarkdownFile(f.name);
+				if (editorMode === "plain" || !isMarkdown) {
 					f.content = editorTextarea.value;
 					persistCurrent();
 				}
