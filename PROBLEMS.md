@@ -451,7 +451,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 
 ## 8. Accessibility, Responsiveness & Shortcuts (Medium / Low)
 
-- [ ] **A11Y-01: Zero `@media` Queries Causing Total UI Collapse on Mobile & Small Screens**
+- [x] **A11Y-01: Zero `@media` Queries Causing Total UI Collapse on Mobile & Small Screens** (FIXED)
   - **Severity:** High
   - **Location:** [`css/styles.css`](file:///home/raja/Workspace/keepLocal/css/styles.css)
   - **Problem Description:** `css/styles.css` contains zero media queries. On screens narrower than 768px (e.g. mobile phones at 375px width or split-screen windows), `.welcome-left` has a hardcoded `380px` width that overflows the viewport, pushing `.welcome-right` completely off-screen. Users cannot see or access their workspaces. In the editor view, the sidebar cannot be toggled or collapsed on mobile.
@@ -460,28 +460,28 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
     1. Stack the welcome screen panels vertically and let `.welcome-left` take `width: 100%`.
     2. Add a mobile sidebar toggle button and backdrop.
 
-- [ ] **A11Y-02: Confirmation & Alert Modals Lack Focus Management & Close Buttons**
+- [x] **A11Y-02: Confirmation & Alert Modals Lack Focus Management & Close Buttons** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L903-L926`](file:///home/raja/Workspace/keepLocal/js/script.js#L903-L926) & [`index.html#L288-L301`](file:///home/raja/Workspace/keepLocal/index.html#L288-L301)
   - **Problem Description:** When `showConfirmModal()` opens, `modalInput` is hidden, but focus is not transferred to `modalConfirmBtn`. Pressing `Enter` does nothing. When `showAlertModal()` opens, it displays "Press Esc to close" with **no button at all**, making it impossible for touch/mobile users without a keyboard to dismiss alerts easily.
   - **Impact:** Broken keyboard navigation and mobile modal entrapment.
   - **How to Fix:** Focus `modalConfirmBtn` when opening confirmation modals. Add an "OK" button to alert modals for touch and mouse users. Trap focus inside `.modal-container`.
 
-- [ ] **A11Y-03: Keyboard Shortcuts Do Not Support Mac `Command` (`Cmd`) Key**
+- [x] **A11Y-03: Keyboard Shortcuts Do Not Support Mac `Command` (`Cmd`) Key** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L2046-L2072`](file:///home/raja/Workspace/keepLocal/js/script.js#L2046-L2072)
   - **Problem Description:** All shortcuts check `e.ctrlKey` exclusively. On macOS, users expect `Cmd+S`, `Cmd+N`, and `Cmd+Shift+L`. Pressing `Cmd+S` on Mac triggers the browser's native "Save Page As" prompt instead of saving.
   - **Impact:** Broken shortcut conventions for all macOS users.
   - **How to Fix:** Check `(e.ctrlKey || e.metaKey)` in all keyboard event handlers.
 
-- [ ] **A11Y-04: Multi-Line Selection Tab Indentation Replaces Text with Spaces**
+- [x] **A11Y-04: Multi-Line Selection Tab Indentation Replaces Text with Spaces** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L2024-L2032`](file:///home/raja/Workspace/keepLocal/js/script.js#L2024-L2032)
   - **Problem Description:** In `editorTextarea`, pressing `Tab` replaces whatever text is currently selected with 4 spaces. If a user selects 10 lines of code and presses `Tab` to indent them, all 10 lines are deleted and replaced by 4 spaces! `Shift+Tab` (unindent) is also unhandled.
   - **Impact:** Accidental deletion of selected code blocks upon pressing Tab.
   - **How to Fix:** Detect multi-line selection on `Tab`. If lines are selected, prepend 4 spaces to each line. On `Shift+Tab`, strip up to 4 leading spaces from each selected line.
 
-- [ ] **A11Y-05: Context Menu Uses Page Coordinates for Fixed Position Element**
+- [x] **A11Y-05: Context Menu Uses Page Coordinates for Fixed Position Element** (FIXED)
   - **Severity:** Low
   - **Location:** [`js/script.js#L1570-L1575`](file:///home/raja/Workspace/keepLocal/js/script.js#L1570-L1575) & [`css/styles.css#L1526-L1535`](file:///home/raja/Workspace/keepLocal/css/styles.css#L1526-L1535)
   - **Problem Description:** `.context-menu` is styled as `position: fixed;`, but line 1570 calculates its position using `e.pageY` and `e.pageX` (document-relative coordinates) instead of `e.clientY` and `e.clientX` (viewport-relative coordinates).

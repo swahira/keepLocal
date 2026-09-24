@@ -85,11 +85,11 @@
             <div class="welcome-tips">
                 <div class="welcome-tip">
                     <i data-lucide="zap" size="13"></i>
-                    <span><b>Ctrl+S</b> syncs to connected folder</span>
+                    <span><b>Ctrl/Cmd+S</b> syncs to connected folder</span>
                 </div>
                 <div class="welcome-tip">
                     <i data-lucide="zap" size="13"></i>
-                    <span><b>Ctrl+N</b> creates a new file</span>
+                    <span><b>Ctrl/Cmd+N</b> creates a new file</span>
                 </div>
                 <div class="welcome-tip">
                     <i data-lucide="zap" size="13"></i>
@@ -97,7 +97,7 @@
                 </div>
                 <div class="welcome-tip">
                     <i data-lucide="zap" size="13"></i>
-                    <span><b>Ctrl+Shift+L</b> toggles theme</span>
+                    <span><b>Ctrl/Cmd+Shift+L</b> toggles theme</span>
                 </div>
             </div>
 
@@ -136,20 +136,27 @@
      EDITOR APP
 ════════════════════════════════════════════════════════ -->
     <div id="appShell" class="app hidden">
+        <div id="sidebarBackdrop" class="sidebar-backdrop hidden" onclick="closeMobileSidebar()"></div>
 
         <!-- Sidebar -->
         <div class="sidebar">
             <!-- Sidebar Header / Workspace Switcher -->
             <div class="sidebar-header" style="position: relative;">
-                <button class="ws-switcher-btn" id="wsSwitcherBtn" onclick="toggleWsDropdown(event)"
-                    title="Switch Workspace">
-                    <img src="assets/keeplocal.png" alt="KeepLocal" class="sidebar-logo-img">
-                    <div class="ws-name-wrap">
-                        <span class="sidebar-ws-name" id="sidebarWsName">Workspace</span>
-                        <span class="sidebar-ws-folder" id="sidebarWsFolder">Local Storage</span>
-                    </div>
-                    <i data-lucide="chevrons-up-down" size="14" class="ws-switch-icon"></i>
-                </button>
+                <div class="sidebar-header-row">
+                    <button class="ws-switcher-btn" id="wsSwitcherBtn" onclick="toggleWsDropdown(event)"
+                        title="Switch Workspace">
+                        <img src="assets/keeplocal.png" alt="KeepLocal" class="sidebar-logo-img">
+                        <div class="ws-name-wrap">
+                            <span class="sidebar-ws-name" id="sidebarWsName">Workspace</span>
+                            <span class="sidebar-ws-folder" id="sidebarWsFolder">Local Storage</span>
+                        </div>
+                        <i data-lucide="chevrons-up-down" size="14" class="ws-switch-icon"></i>
+                    </button>
+                    <button id="mobileSidebarCloseBtn" class="mobile-sidebar-close-btn" onclick="closeMobileSidebar()"
+                        title="Close Sidebar" aria-label="Close Sidebar">
+                        <i data-lucide="x" size="16"></i>
+                    </button>
+                </div>
 
                 <!-- Workspace Switcher Dropdown Menu (GitHub style) -->
                 <div id="wsDropdown" class="ws-dropdown hidden">
@@ -250,6 +257,10 @@
             </div>
 
             <div class="topbar">
+                <button id="mobileSidebarToggle" class="mobile-sidebar-toggle" onclick="toggleMobileSidebar()"
+                    title="Toggle Sidebar" aria-label="Toggle Sidebar">
+                    <i data-lucide="menu" size="16"></i>
+                </button>
                 <div id="breadcrumb"></div>
                 <div class="controls">
                     <div class="mode-switch-group">
@@ -298,7 +309,7 @@
 
     <!-- Modal -->
     <div id="modalOverlay" class="modal-overlay">
-        <div class="modal-container">
+        <div class="modal-container" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
             <div id="modalTitle" class="modal-title">Enter name</div>
             <input id="modalInput" class="modal-input" type="text" spellcheck="false" />
             <div id="modalMessage" class="modal-message hidden"></div>
@@ -307,6 +318,9 @@
                 <div id="modalConfirmButtons" class="modal-buttons hidden">
                     <button id="modalCancelBtn" class="modal-btn secondary">Cancel</button>
                     <button id="modalConfirmBtn" class="modal-btn primary">Confirm</button>
+                </div>
+                <div id="modalAlertButtons" class="modal-buttons hidden">
+                    <button id="modalAlertOkBtn" class="modal-btn primary">OK</button>
                 </div>
                 <div id="modalChoiceButtons" class="modal-choices hidden"></div>
             </div>

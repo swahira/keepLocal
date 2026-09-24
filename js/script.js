@@ -1238,6 +1238,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const modalConfirmBtn = document.getElementById("modalConfirmBtn");
 	const modalCancelBtn = document.getElementById("modalCancelBtn");
 	const modalChoiceBtns = document.getElementById("modalChoiceButtons");
+	const modalAlertBtns = document.getElementById("modalAlertButtons");
+	const modalAlertOkBtn = document.getElementById("modalAlertOkBtn");
+	if (modalAlertOkBtn) {
+		modalAlertOkBtn.onclick = () => hideModal();
+	}
 	let modalCb = null;
 
 	function showInputModal(title, def, cb) {
@@ -1248,6 +1253,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalInputHint.classList.remove("hidden");
 		modalInputHint.innerHTML = "Press <b>Enter</b> to confirm, <b>Esc</b> to cancel";
 		modalConfirmBtns.classList.add("hidden");
+		if (modalAlertBtns) modalAlertBtns.classList.add("hidden");
 		if (modalChoiceBtns) { modalChoiceBtns.innerHTML = ""; modalChoiceBtns.classList.add("hidden"); }
 		modalOverlay.classList.add("active");
 		setTimeout(() => { modalInput.focus(); modalInput.select(); }, 30);
@@ -1260,11 +1266,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalMessage.classList.remove("hidden");
 		modalInputHint.classList.add("hidden");
 		modalConfirmBtns.classList.remove("hidden");
+		if (modalAlertBtns) modalAlertBtns.classList.add("hidden");
 		if (modalChoiceBtns) { modalChoiceBtns.innerHTML = ""; modalChoiceBtns.classList.add("hidden"); }
 		modalConfirmBtn.textContent = danger ? "Delete" : "Confirm";
 		modalConfirmBtn.className = danger ? "modal-btn danger" : "modal-btn primary";
 		modalOverlay.classList.add("active");
 		modalCb = cb;
+		setTimeout(() => { if (modalConfirmBtn) modalConfirmBtn.focus(); }, 30);
 	}
 	function showAlertModal(title, msg) {
 		modalTitle.textContent = title;
@@ -1272,11 +1280,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalInput.classList.add("hidden");
 		modalMessage.classList.remove("hidden");
 		modalConfirmBtns.classList.add("hidden");
+		if (modalAlertBtns) modalAlertBtns.classList.remove("hidden");
 		modalInputHint.classList.remove("hidden");
-		modalInputHint.innerHTML = "Press <b>Esc</b> to close";
+		modalInputHint.innerHTML = "Press <b>Esc</b> or click OK to close";
 		if (modalChoiceBtns) { modalChoiceBtns.innerHTML = ""; modalChoiceBtns.classList.add("hidden"); }
 		modalOverlay.classList.add("active");
 		modalCb = null;
+		setTimeout(() => { if (modalAlertOkBtn) modalAlertOkBtn.focus(); }, 30);
 	}
 	function showChoiceModal({ title, message, choices, onSelect }) {
 		modalTitle.textContent = title;
@@ -1284,6 +1294,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalInput.classList.add("hidden");
 		modalMessage.classList.remove("hidden");
 		modalConfirmBtns.classList.add("hidden");
+		if (modalAlertBtns) modalAlertBtns.classList.add("hidden");
 		modalInputHint.classList.remove("hidden");
 		modalInputHint.innerHTML = "Press <b>Esc</b> to cancel";
 
@@ -1310,15 +1321,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalCb = (confirmed) => {
 			if (!confirmed && onSelect) onSelect("cancel");
 		};
+		setTimeout(() => {
+			const firstChoice = modalChoiceBtns?.querySelector("button");
+			if (firstChoice) firstChoice.focus();
+		}, 30);
 	}
 	function hideModal() {
 		modalOverlay.classList.remove("active");
+		if (modalConfirmBtns) modalConfirmBtns.classList.add("hidden");
+		if (modalAlertBtns) modalAlertBtns.classList.add("hidden");
 		if (modalChoiceBtns) {
 			modalChoiceBtns.innerHTML = "";
 			modalChoiceBtns.classList.add("hidden");
 		}
 		modalCb = null;
 	}
+	window.showInputModal = showInputModal;
+	window.showConfirmModal = showConfirmModal;
+	window.showAlertModal = showAlertModal;
+	window.showChoiceModal = showChoiceModal;
+	window.hideModal = hideModal;
 
 	modalInput.addEventListener("keydown", (e) => {
 		if (e.key === "Enter") {
@@ -1335,9 +1357,36 @@ document.addEventListener("DOMContentLoaded", async () => {
 	modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) hideModal(); });
 
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && modalOverlay.classList.contains("active")) {
+		if (!modalOverlay.classList.contains("active")) return;
+		if (e.key === "Escape") {
 			e.preventDefault();
 			hideModal();
+			return;
+		}
+		if (e.key === "Tab") {
+			const container = document.querySelector(".modal-container");
+			if (!container) return;
+			const focusable = Array.from(
+				container.querySelectorAll(
+					'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+				)
+			).filter(el => el.offsetParent !== null && !el.closest(".hidden"));
+
+			if (focusable.length === 0) return;
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+
+			if (e.shiftKey) {
+				if (document.activeElement === first || !container.contains(document.activeElement)) {
+					e.preventDefault();
+					last.focus();
+				}
+			} else {
+				if (document.activeElement === last || !container.contains(document.activeElement)) {
+					e.preventDefault();
+					first.focus();
+				}
+			}
 		}
 	});
 	// ============================================================
@@ -2200,6 +2249,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			renderTabs();
 			await loadFile();
 			updateBreadcrumbs();
+			if (window.innerWidth <= 768 && window.closeMobileSidebar) {
+				window.closeMobileSidebar();
+			}
 		} finally {
 			isOpenTabInProgress = false;
 		}
@@ -2377,9 +2429,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 				e.preventDefault();
 				ctxNodeId = node.id;
 				ctxExport.style.display = node.type === "folder" ? "flex" : "none";
-				let top = e.pageY, left = e.pageX;
-				if (top + 110 > window.innerHeight) top = window.innerHeight - 110;
-				if (left + 170 > window.innerWidth) left = window.innerWidth - 170;
+				let top = e.clientY, left = e.clientX;
+				if (top + 120 > window.innerHeight) top = Math.max(8, window.innerHeight - 120);
+				if (left + 170 > window.innerWidth) left = Math.max(8, window.innerWidth - 170);
 				contextMenu.style.top = top + "px";
 				contextMenu.style.left = left + "px";
 				contextMenu.classList.remove("hidden");
@@ -3165,27 +3217,78 @@ document.addEventListener("DOMContentLoaded", async () => {
 	editorTextarea.addEventListener("keydown", (e) => {
 		if (e.key === "Tab") {
 			e.preventDefault();
-			const s = editorTextarea.selectionStart, end = editorTextarea.selectionEnd;
-			editorTextarea.value = editorTextarea.value.substring(0, s) + "    " + editorTextarea.value.substring(end);
-			editorTextarea.selectionStart = editorTextarea.selectionEnd = s + 4;
-			editorTextarea.dispatchEvent(new Event("input"));
+			const val = editorTextarea.value;
+			const start = editorTextarea.selectionStart;
+			const end = editorTextarea.selectionEnd;
+
+			if (e.shiftKey) {
+				// Shift+Tab: Unindent (single or multi-line)
+				const lineStart = val.lastIndexOf("\n", start - 1) + 1;
+				let lineEnd = val.indexOf("\n", end);
+				if (lineEnd === -1) lineEnd = val.length;
+
+				const lines = val.substring(lineStart, lineEnd).split("\n");
+				let firstLineRemoved = 0;
+				let totalRemoved = 0;
+
+				const unindented = lines.map((line, idx) => {
+					let removeCount = 0;
+					if (line.startsWith("    ")) {
+						removeCount = 4;
+					} else if (line.startsWith("\t")) {
+						removeCount = 1;
+					} else {
+						const match = line.match(/^ {1,3}/);
+						if (match) removeCount = match[0].length;
+					}
+					if (idx === 0) firstLineRemoved = removeCount;
+					totalRemoved += removeCount;
+					return line.slice(removeCount);
+				});
+
+				editorTextarea.value = val.substring(0, lineStart) + unindented.join("\n") + val.substring(lineEnd);
+				editorTextarea.selectionStart = Math.max(lineStart, start - firstLineRemoved);
+				editorTextarea.selectionEnd = Math.max(lineStart, end - totalRemoved);
+				editorTextarea.dispatchEvent(new Event("input"));
+			} else {
+				// Tab: Indent
+				if (start !== end && val.substring(start, end).includes("\n")) {
+					// Multi-line selection: indent each line by prepending 4 spaces
+					const lineStart = val.lastIndexOf("\n", start - 1) + 1;
+					let lineEnd = val.indexOf("\n", end);
+					if (lineEnd === -1) lineEnd = val.length;
+
+					const lines = val.substring(lineStart, lineEnd).split("\n");
+					const indented = lines.map(line => "    " + line);
+					const addedTotal = 4 * lines.length;
+
+					editorTextarea.value = val.substring(0, lineStart) + indented.join("\n") + val.substring(lineEnd);
+					editorTextarea.selectionStart = start + 4;
+					editorTextarea.selectionEnd = end + addedTotal;
+					editorTextarea.dispatchEvent(new Event("input"));
+				} else {
+					// Single line / caret: insert 4 spaces
+					editorTextarea.value = val.substring(0, start) + "    " + val.substring(end);
+					editorTextarea.selectionStart = editorTextarea.selectionEnd = start + 4;
+					editorTextarea.dispatchEvent(new Event("input"));
+				}
+			}
 		}
 	});
 	editorTextarea.addEventListener("keyup", updateCursor);
 	editorTextarea.addEventListener("click", updateCursor);
 	editorTextarea.addEventListener("focus", updateCursor);
-	editorTextarea.addEventListener("scroll", () => { if (lineNumbersEl) lineNumbersEl.scrollTop = editorTextarea.scrollTop; });
 
-	// Ctrl+Wheel → editor font size only
+	// Ctrl/Cmd+Wheel → editor font size only
 	document.querySelector(".main")?.addEventListener("wheel", (e) => {
-		if (e.ctrlKey) { e.preventDefault(); changeFontSize(e.deltaY < 0 ? 1 : -1); }
+		if (e.ctrlKey || e.metaKey) { e.preventDefault(); changeFontSize(e.deltaY < 0 ? 1 : -1); }
 	}, { passive: false });
 
 	// ============================================================
 	// KEYBOARD SHORTCUTS
 	// ============================================================
 	document.addEventListener("keydown", async (e) => {
-		if (e.ctrlKey && e.key === "s") {
+		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
 			e.preventDefault();
 			if (!activeWsId) return;
 			if (workspaceHandle) {
@@ -3205,13 +3308,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 				saveWorkspace();
 			}
 		}
-		if (e.ctrlKey && e.key === "n" && activeWsId) {
+		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n" && activeWsId) {
 			e.preventDefault(); addFile();
 		}
 	});
 
 	document.addEventListener("keydown", (e) => {
-		if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "l") {
+		if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "l") {
 			e.preventDefault();
 			toggleTheme();
 		}
@@ -3242,6 +3345,47 @@ document.addEventListener("DOMContentLoaded", async () => {
 		resizeHandle?.classList.remove("active"); sidebar?.classList.remove("resizing");
 		document.body.style.cursor = "auto"; document.body.style.userSelect = "auto";
 		if (activeWsId) saveWsConfig(activeWsId);
+	});
+
+	// ============================================================
+	// MOBILE SIDEBAR (A11Y-01)
+	// ============================================================
+	window.toggleMobileSidebar = function (force) {
+		const sb = document.querySelector(".sidebar");
+		const backdrop = document.getElementById("sidebarBackdrop");
+		if (!sb) return;
+		const isOpen = sb.classList.contains("mobile-open");
+		const shouldOpen = typeof force === "boolean" ? force : !isOpen;
+		if (shouldOpen) {
+			sb.classList.add("mobile-open");
+			if (backdrop) {
+				backdrop.classList.remove("hidden");
+				requestAnimationFrame(() => backdrop.classList.add("active"));
+			}
+		} else {
+			sb.classList.remove("mobile-open");
+			if (backdrop) {
+				backdrop.classList.remove("active");
+				setTimeout(() => {
+					if (!sb.classList.contains("mobile-open")) {
+						backdrop.classList.add("hidden");
+					}
+				}, 250);
+			}
+		}
+	};
+
+	window.closeMobileSidebar = function () {
+		window.toggleMobileSidebar(false);
+	};
+
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape") {
+			const sb = document.querySelector(".sidebar");
+			if (sb?.classList.contains("mobile-open")) {
+				window.closeMobileSidebar();
+			}
+		}
 	});
 
 	// ============================================================
