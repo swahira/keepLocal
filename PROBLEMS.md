@@ -412,35 +412,35 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 
 ## 7. Styling, Dead Code & CSS Defects (Medium / Low)
 
-- [ ] **STYLE-01: Workspace Switcher Dropdown Clipped by Sidebar `overflow: hidden`**
+- [x] **STYLE-01: Workspace Switcher Dropdown Clipped by Sidebar `overflow: hidden`** (FIXED)
   - **Severity:** High
   - **Location:** [`css/styles.css#L105-L115`](file:///home/raja/Workspace/keepLocal/css/styles.css#L105-L115) & [`css/styles.css#L189-L203`](file:///home/raja/Workspace/keepLocal/css/styles.css#L189-L203)
   - **Problem Description:** `.sidebar` has `overflow: hidden;` and min-width `180px` (default `220px`). `.ws-dropdown` has `min-width: 240px;`. Whenever the sidebar is narrower than 240px, the right side of the dropdown (including active checkmarks) is clipped off-screen.
   - **Impact:** Switcher dropdown is cut off and broken on standard sidebar widths.
   - **How to Fix:** Set `width: 100%; min-width: 0; box-sizing: border-box;` on `.ws-dropdown`, or change `.sidebar-header` overflow handling.
 
-- [ ] **STYLE-02: Global Theme Setting Is Never Persisted to LocalStorage**
+- [x] **STYLE-02: Global Theme Setting Is Never Persisted to LocalStorage** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1315-L1319`](file:///home/raja/Workspace/keepLocal/js/script.js#L1315-L1319) (`toggleTheme`) & [`js/script.js#L2131`](file:///home/raja/Workspace/keepLocal/js/script.js#L2131)
   - **Problem Description:** Line 2131 attempts to read `localStorage.getItem("keeplocal_global_theme")`. However, `toggleTheme()` only writes to `saveWsConfig(activeWsId)`. The key `"keeplocal_global_theme"` is **never written anywhere in the codebase**. As a result, the welcome screen always reverts to `"dark"` on reload.
   - **Impact:** Theme toggle does not persist across welcome screen reloads.
   - **How to Fix:** Add `localStorage.setItem("keeplocal_global_theme", theme);` inside `toggleTheme()`.
 
-- [ ] **STYLE-03: Sidebar Inline Width Overrides Workspace-Specific Saved Widths**
+- [x] **STYLE-03: Sidebar Inline Width Overrides Workspace-Specific Saved Widths** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L2088`](file:///home/raja/Workspace/keepLocal/js/script.js#L2088) & [`js/script.js#L149`](file:///home/raja/Workspace/keepLocal/js/script.js#L149)
   - **Problem Description:** Dragging the resize handle sets an inline DOM style `sidebar.style.width = ... px`. When switching workspaces, `loadWsConfig()` sets `document.documentElement.style.setProperty("--sidebar-width", ...)`. Because the inline DOM style takes precedence over the CSS variable, the sidebar remains permanently frozen at the last dragged width across all workspaces.
   - **Impact:** Per-workspace sidebar width settings fail to apply.
   - **How to Fix:** Set `document.documentElement.style.setProperty("--sidebar-width", ...)` during drag, or update `sidebar.style.width` directly in `loadWsConfig()`.
 
-- [ ] **STYLE-04: Dead Elements Queried in JavaScript (`workspacePathLabel`, `wsSyncBtn`, `workspacePathBar`)**
+- [x] **STYLE-04: Dead Elements Queried in JavaScript (`workspacePathLabel`, `wsSyncBtn`, `workspacePathBar`)** (FIXED)
   - **Severity:** Low
   - **Location:** [`js/script.js#L39-L40`](file:///home/raja/Workspace/keepLocal/js/script.js#L39-L40), [`js/script.js#L751-L804`](file:///home/raja/Workspace/keepLocal/js/script.js#L751-L804)
   - **Problem Description:** JavaScript queries `workspacePathLabel`, `wsSyncBtn`, and `workspacePathBar` via `document.getElementById()`, but none of these IDs exist in `index.html`. They are dead leftovers from an earlier revision.
   - **Impact:** Dead code, useless DOM queries, and maintenance confusion.
   - **How to Fix:** Clean up unused variables and references in `js/script.js`.
 
-- [ ] **STYLE-05: Redundant Duplicate Selectors in `css/styles.css`**
+- [x] **STYLE-05: Redundant Duplicate Selectors in `css/styles.css`** (FIXED)
   - **Severity:** Low
   - **Location:** [`css/styles.css#L300-L327`](file:///home/raja/Workspace/keepLocal/css/styles.css#L300-L327) vs [`css/styles.css#L400-L422`](file:///home/raja/Workspace/keepLocal/css/styles.css#L400-L422); [`css/styles.css#L943`](file:///home/raja/Workspace/keepLocal/css/styles.css#L943) vs [`css/styles.css#L1018`](file:///home/raja/Workspace/keepLocal/css/styles.css#L1018)
   - **Problem Description:** `.section-header`, `.section-title`, `.section-chevron`, and `#codeHighlightPre code` are defined twice with conflicting font sizes (`11px` vs `10px`).

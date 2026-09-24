@@ -41,8 +41,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const workspacesEmpty = document.getElementById("workspacesEmpty");
 	const wsCountBadge = document.getElementById("wsCountBadge");
 	const sidebarWsName = document.getElementById("sidebarWsName");
-	const workspacePathLabel = document.getElementById("workspacePathLabel");
-	const wsSyncBtn = document.getElementById("wsSyncBtn");
 	const wsStatusBadge = document.getElementById("wsStatusBadge");
 	const saveWorkspaceBtn = document.getElementById("saveWorkspaceBtn");
 	const browserSupportMsg = document.getElementById("browserSupportMessage");
@@ -296,15 +294,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 				isWordWrap = !!c.isWordWrap;
 				if (c.sidebarWidth) {
 					document.documentElement.style.setProperty("--sidebar-width", c.sidebarWidth + "px");
+				} else {
+					document.documentElement.style.removeProperty("--sidebar-width");
 				}
+				if (sidebar) sidebar.style.width = "";
 			} else {
 				openTabs = [];
 				isWordWrap = false;
+				document.documentElement.style.removeProperty("--sidebar-width");
+				if (sidebar) sidebar.style.width = "";
 			}
 		} catch (e) {
 			console.warn("loadWsConfig:", e);
 			openTabs = [];
 			isWordWrap = false;
+			document.documentElement.style.removeProperty("--sidebar-width");
+			if (sidebar) sidebar.style.width = "";
 		}
 	}
 
@@ -1037,36 +1042,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function updateFolderUI() {
-		const pathBar = document.getElementById("workspacePathBar");
 		const wsFolderLabel = document.getElementById("sidebarWsFolder");
 
 		// Browser doesn't support folder sync at all — leave the
 		// "unsupported browser" state from initWorkspaceButton() alone.
 		if (!supportsFS) {
-			if (workspacePathLabel) workspacePathLabel.textContent = "Local workspace";
 			if (wsFolderLabel) {
 				wsFolderLabel.textContent = "Local storage";
 				wsFolderLabel.classList.remove("has-folder");
 			}
-			if (wsSyncBtn) wsSyncBtn.style.display = "none";
 			if (wsStatusBadge) {
 				wsStatusBadge.textContent = "No folder";
 				wsStatusBadge.classList.remove("connected");
 			}
-			pathBar?.classList.remove("has-folder");
 			if (window.lucide) lucide.createIcons();
 			return;
 		}
 
 		if (workspaceHandle) {
-			if (workspacePathLabel) workspacePathLabel.textContent = workspaceHandle.name;
 			if (wsFolderLabel) {
 				wsFolderLabel.textContent = fsPermissionGranted
 					? workspaceHandle.name
 					: `${workspaceHandle.name} (not authorized)`;
 				wsFolderLabel.classList.add("has-folder");
 			}
-			if (wsSyncBtn) wsSyncBtn.style.display = "flex";
 			if (wsStatusBadge) {
 				if (fsPermissionGranted) {
 					wsStatusBadge.textContent = workspaceHandle.name;
@@ -1091,14 +1090,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 					saveWorkspaceBtn.onclick = () => requestReauthorization();
 				}
 			}
-			pathBar?.classList.add("has-folder");
 		} else {
-			if (workspacePathLabel) workspacePathLabel.textContent = "Local workspace";
 			if (wsFolderLabel) {
 				wsFolderLabel.textContent = "Local storage";
 				wsFolderLabel.classList.remove("has-folder");
 			}
-			if (wsSyncBtn) wsSyncBtn.style.display = "none";
 			if (wsStatusBadge) {
 				wsStatusBadge.textContent = "No folder";
 				wsStatusBadge.classList.remove("connected");
@@ -1107,7 +1103,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 				saveWorkspaceBtn.innerHTML = '<i data-lucide="hard-drive" size="14"></i> <span>Connect Folder</span>';
 				saveWorkspaceBtn.title = "Connect a local folder to sync files";
 			}
-			pathBar?.classList.remove("has-folder");
 		}
 		checkStorageQuota();
 		if (window.lucide) lucide.createIcons();
@@ -2091,6 +2086,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	window.toggleTheme = function () {
 		theme = theme === "light" ? "dark" : "light";
+		localStorage.setItem("keeplocal_global_theme", theme);
 		applyConfig();
 		if (activeWsId) saveWsConfig(activeWsId);
 	};
@@ -3236,7 +3232,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 	});
 	document.addEventListener("mousemove", (e) => {
 		if (!isResizing) return;
-		sidebar.style.width = Math.max(180, Math.min(600, startWidth + (e.clientX - startX))) + "px";
+		const newWidth = Math.max(180, Math.min(600, startWidth + (e.clientX - startX)));
+		document.documentElement.style.setProperty("--sidebar-width", newWidth + "px");
+		sidebar.style.width = "";
 	});
 	document.addEventListener("mouseup", () => {
 		if (!isResizing) return;
