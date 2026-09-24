@@ -2771,7 +2771,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				case "warning": {
 					const title = h2md(b.data.title || "").trim();
 					const msg = h2md(b.data.message || "").trim();
-					if (title) {
+					if (title && title.toLowerCase() !== "note") {
 						lines.push(`> [!NOTE] ${title}`);
 					} else {
 						lines.push(`> [!NOTE]`);
