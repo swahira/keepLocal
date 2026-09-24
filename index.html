@@ -89,7 +89,11 @@
                 </div>
                 <div class="welcome-tip">
                     <i data-lucide="zap" size="13"></i>
-                    <span><b>Ctrl/Cmd+N</b> creates a new file</span>
+                    <span><b>Alt+N</b> creates a new note</span>
+                </div>
+                <div class="welcome-tip">
+                    <i data-lucide="zap" size="13"></i>
+                    <span><b>Alt+W</b> closes active note</span>
                 </div>
                 <div class="welcome-tip">
                     <i data-lucide="zap" size="13"></i>
@@ -195,7 +199,7 @@
                         <button class="icon-btn" onclick="toggleSearchBar()" title="Search Files">
                             <i data-lucide="search" size="11"></i>
                         </button>
-                        <button class="icon-btn" onclick="addFile()" title="New File (Ctrl+N)">
+                        <button class="icon-btn" onclick="addFile()" title="New File (Alt+N)">
                             <i data-lucide="file-plus" size="11"></i>
                         </button>
                         <button class="icon-btn" onclick="addFolder()" title="New Folder">
@@ -289,6 +293,13 @@
             </div>
 
             <div class="editor-container">
+                <div id="editorEmptyState" class="editor-empty-state hidden">
+                    <div class="empty-state-icon">
+                        <i data-lucide="file-text" size="48"></i>
+                    </div>
+                    <p>No open note</p>
+                    <small>Select a note from the explorer, press <b>Alt+N</b>, or <a href="javascript:void(0)" onclick="addFile()" class="empty-state-link">create a new note</a></small>
+                </div>
                 <div id="editorjs" class="editorjs-wrapper"></div>
                 <div id="plainEditorWrapper" class="plain-editor-wrapper hidden">
                     <div id="lineNumbers" class="line-numbers"></div>

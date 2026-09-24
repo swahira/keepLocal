@@ -10,14 +10,14 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Data Loss & State Corruption** | 6 | 4 | 2 | 0 | 0 |
 | **File System API & Sync Engine** | 5 | 1 | 4 | 0 | 0 |
-| **Editor, Tabs & Line Numbers** | 9 | 0 | 6 | 3 | 0 |
+| **Editor, Tabs & Line Numbers** | 10 | 0 | 7 | 3 | 0 |
 | **Markdown & Editor.js Bridge** | 5 | 1 | 1 | 3 | 0 |
 | **ZIP Import / Export System** | 5 | 0 | 2 | 3 | 0 |
 | **Search, Navigation & Explorer** | 3 | 0 | 0 | 3 | 0 |
 | **Styling, Dead Code & CSS Defects** | 5 | 0 | 1 | 2 | 2 |
 | **Accessibility, Responsiveness & Shortcuts** | 5 | 0 | 1 | 2 | 2 |
 | **Architecture, Offline & Security** | 4 | 1 | 1 | 1 | 1 |
-| **Total** | **47** | **7** | **18** | **17** | **5** |
+| **Total** | **48** | **7** | **19** | **17** | **5** |
 
 ---
 
@@ -278,6 +278,16 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
     1. Introduce an `editorLoadedFileId` variable to explicitly track which file is currently rendered in `editorInstance`. In `autoSaveCurrentFile()`, write to `targetId || editorLoadedFileId || selectedId`, ensuring Editor.js blocks are saved only to the file they originated from.
     2. Guard `autoSaveCurrentFile()` so that it immediately returns if `isInitEditor` is active, preventing incomplete/transition states from overwriting notes.
     3. Add re-entrancy locks (`isAddingFile` and `isOpenTabInProgress`) to serialize `addFile()` and `openTab()` execution and prevent concurrent asynchronous render races.
+
+- [x] **EDIT-10: Inability to Close the Only Open Tab / Last Tab Due to Fallback Loop** (FIXED)
+  - **Severity:** High
+  - **Location:** [`js/script.js#L2304-L2325`](file:///home/raja/Workspace/keepLocal/js/script.js#L2304-L2325) (`closeTab`), [`js/script.js#L3064-L3120`](file:///home/raja/Workspace/keepLocal/js/script.js#L3064-L3120) (`loadFile`), [`js/script.js#L2335-L2345`](file:///home/raja/Workspace/keepLocal/js/script.js#L2335-L2345) (`renderTabs`), [`index.html#L291-L300`](file:///home/raja/Workspace/keepLocal/index.html#L291-L300)
+  - **Problem Description:** When closing the only open tab (or last open tab), `closeTab()` clears `openTabs` and sets `selectedId = null`. However, `loadFile()` contained a legacy fallback: `if (!file) { const fb = findFirstFile(files); if (fb) { selectedId = fb.id; file = fb; } }`. This immediately re-selected the first workspace file (`untitled.md`). Subsequently, `renderTabs()` noticed `selectedId` was set but not present in `openTabs`, so it automatically pushed `selectedId` back into `openTabs`. As a result, the closed tab instantly reopened, making it impossible to close the only open file.
+  - **Impact:** Users could not close the single open file or close all tabs to return to an empty workspace view.
+  - **How to Fix:**
+    1. Remove the automatic `findFirstFile()` fallback in `loadFile()`, allowing `selectedId` to remain `null` when all tabs are closed.
+    2. Add an `#editorEmptyState` watermark to `index.html` and `css/styles.css` that displays when no note is open, with a prompt to select a note or press `Ctrl+N`.
+    3. Update `updateLineNumbers()`, `updateCursor()`, and `updateEditorModeUI()` to gracefully display empty/inactive status when no file is selected.
 
 ---
 

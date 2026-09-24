@@ -62,7 +62,8 @@ Since KeepLocal is a client-side application, you can run it locally with any st
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+S` / `Cmd+S` | Auto-save file and sync to connected directory |
-| `Ctrl+N` / `Cmd+N` | Create a new note in active folder |
+| `Alt+N` / `Option+N` | Create a new note in active folder |
+| `Alt+W` / `Option+W` | Close active note / tab |
 | `Ctrl+Shift+L` / `Cmd+Shift+L` | Toggle Light / Dark theme |
 | `Alt+Z` | Toggle word wrap in raw editor |
 | `Tab` | Indent line or multi-line selection (4 spaces) |

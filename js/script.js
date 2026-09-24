@@ -50,6 +50,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const editorStatusSpan = document.getElementById("editorStatus");
 	const editorjsWrapper = document.getElementById("editorjs");
 	const plainWrapper = document.getElementById("plainEditorWrapper");
+	const editorEmptyState = document.getElementById("editorEmptyState");
 	const lineNumbersEl = document.getElementById("lineNumbers");
 	const editorTextarea = document.getElementById("editor");
 	const modeBlockBtn = document.getElementById("modeBlockBtn");
@@ -862,6 +863,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 		// Validate selectedId
 		if (selectedId && !findNode(files, selectedId)) selectedId = null;
 
+		// If no selectedId, but openTabs has valid files, select the first valid tab
+		if (!selectedId && openTabs.length > 0) {
+			const validTab = openTabs.find(tid => {
+				const n = findNode(files, tid);
+				return n && n.type === "file";
+			});
+			if (validTab) selectedId = validTab;
+		}
+
 		// Save active workspace ID so page reload returns here directly
 		try {
 			localStorage.setItem("keeplocal_active_ws_id", wsId);
@@ -1046,18 +1056,23 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function updateEditorModeUI() {
+		const hasFile = !!(selectedId && findNode(files, selectedId)?.type === "file");
 		if (editorMode === "block") {
 			modeBlockBtn?.classList.add("active");
 			modePlainBtn?.classList.remove("active");
-			editorjsWrapper?.classList.remove("hidden");
-			plainWrapper?.classList.add("hidden");
-			if (editorStatusSpan) editorStatusSpan.textContent = "Block Mode";
+			if (hasFile) {
+				editorjsWrapper?.classList.remove("hidden");
+				plainWrapper?.classList.add("hidden");
+				if (editorStatusSpan) editorStatusSpan.textContent = "Block Mode";
+			}
 		} else {
 			modePlainBtn?.classList.add("active");
 			modeBlockBtn?.classList.remove("active");
-			plainWrapper?.classList.remove("hidden");
-			editorjsWrapper?.classList.add("hidden");
-			if (editorStatusSpan) editorStatusSpan.textContent = "Raw Text";
+			if (hasFile) {
+				plainWrapper?.classList.remove("hidden");
+				editorjsWrapper?.classList.add("hidden");
+				if (editorStatusSpan) editorStatusSpan.textContent = "Raw Text";
+			}
 		}
 	}
 
@@ -3048,15 +3063,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	async function loadFile() {
 		let file = findNode(files, selectedId);
-		if (!file) {
-			const fb = findFirstFile(files);
-			if (fb) { selectedId = fb.id; file = fb; }
+		if (!file || file.type !== "file") {
+			file = null;
 		}
 
 		editorLoadedFileId = null;
 		isInitEditor = true;
 
-		if (file?.type === "file") {
+		if (file) {
 			const text = file.content || "";
 			editorTextarea.value = text;
 			editorTextarea.disabled = false;
@@ -3075,6 +3089,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			} else {
 				if (modeBlockBtn) modeBlockBtn.disabled = false;
 			}
+			if (modePlainBtn) modePlainBtn.disabled = false;
+
+			if (editorEmptyState) editorEmptyState.classList.add("hidden");
 
 			if (editorMode === "block" && isMarkdown) {
 				editorjsWrapper.classList.remove("hidden");
@@ -3085,13 +3102,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 				editorjsWrapper.classList.add("hidden");
 			}
 			editorLoadedFileId = file.id;
+			if (editorStatusSpan) editorStatusSpan.textContent = editorMode === "block" ? "Block Mode" : "Raw Text";
 		} else {
-			const hasF = !!findFirstFile(files);
+			if (editorEmptyState) {
+				editorEmptyState.classList.remove("hidden");
+				if (window.lucide) lucide.createIcons();
+			}
+			editorjsWrapper?.classList.add("hidden");
+			plainWrapper?.classList.add("hidden");
+			if (modeBlockBtn) modeBlockBtn.disabled = true;
+			if (modePlainBtn) modePlainBtn.disabled = true;
 			editorTextarea.value = "";
-			editorTextarea.disabled = hasF;
-			editorTextarea.placeholder = hasF ? "Select a file to edit" : "Create a file to start writing…";
-			if (editorMode === "block") await initOrUpdateEditorJs("");
+			editorTextarea.disabled = true;
 			editorLoadedFileId = null;
+			if (editorStatusSpan) editorStatusSpan.textContent = "No file open";
+			if (cursorPosSpan) cursorPosSpan.textContent = "—";
 		}
 
 		isInitEditor = false;
@@ -3262,12 +3287,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	function updateLineNumbers() {
 		if (!lineNumbersEl) return;
+		const file = findNode(files, selectedId);
+		if (!file || file.type !== "file") {
+			lineNumbersEl.textContent = "";
+			return;
+		}
 		const count = editorTextarea.value.split("\n").length;
 		const nums = [];
 		for (let i = 1; i <= count; i++) nums.push(i);
 		lineNumbersEl.textContent = nums.join("\n");
 	}
 	function updateCursor() {
+		const file = findNode(files, selectedId);
+		if (!file || file.type !== "file") {
+			if (cursorPosSpan) cursorPosSpan.textContent = "—";
+			return;
+		}
 		const before = editorTextarea.value.substring(0, editorTextarea.selectionStart);
 		const lines = before.split("\n");
 		cursorPosSpan.textContent = `Ln ${lines.length}, Col ${lines[lines.length - 1].length + 1}`;
@@ -3378,8 +3413,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 				saveWorkspace();
 			}
 		}
-		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n" && activeWsId) {
-			e.preventDefault(); addFile();
+		// New note shortcut: Alt+N (or Option+N) / Ctrl+N / Cmd+N
+		if ((e.altKey || e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "n" || e.code === "KeyN") && !e.shiftKey && activeWsId) {
+			e.preventDefault();
+			addFile();
+		}
+
+		// Close note shortcut: Alt+W (or Option+W)
+		if (e.altKey && (e.key.toLowerCase() === "w" || e.code === "KeyW") && activeWsId) {
+			e.preventDefault();
+			const targetId = (selectedId && findNode(files, selectedId)?.type === "file")
+				? selectedId
+				: (openTabs.length > 0 ? openTabs[openTabs.length - 1] : null);
+			if (targetId) {
+				closeTab(targetId);
+			}
 		}
 	});
 
@@ -3463,7 +3511,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	fileTreeEl.addEventListener("click", async (e) => {
 		if (e.target === fileTreeEl) {
-			if (selectedId) {
+			if (openTabs.length === 0 && selectedId) {
 				await autoSaveCurrentFile();
 				selectedId = null;
 				render();
