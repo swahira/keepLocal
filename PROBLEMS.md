@@ -120,7 +120,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Massive browser UI lag, CPU spikes, and potential disk write corruption.
   - **How to Fix:** Debounce `syncWorkspace()` by 1000–1500ms so disk writes only occur after the user pauses typing. Maintain an `isSyncing` flag and queue to serialize disk writes.
 
-- [ ] **FS-02: Workspace Overlap Bug Due to Basename Comparison in `openFolderWorkspace`**
+- [x] **FS-02: Workspace Overlap Bug Due to Basename Comparison in `openFolderWorkspace`** (FIXED)
   - **Severity:** High
   - **Location:** [`js/script.js#L394-L401`](file:///home/raja/Workspace/keepLocal/js/script.js#L394-L401)
   - **Problem Description:** When connecting a folder on the welcome screen:
@@ -139,14 +139,14 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Accidental overwriting of workspace folder handles and mixing of unrelated workspaces.
   - **How to Fix:** Do not assume identical directory basenames represent the same workspace. Check handle equality using `await handle.isSameEntry(storedHandle)` with stored IndexedDB handles, or prompt the user if a workspace with the same folder name already exists.
 
-- [ ] **FS-03: Restored File System Handles Silently Fail to Sync Due to Unhandled Permission Prompt**
+- [x] **FS-03: Restored File System Handles Silently Fail to Sync Due to Unhandled Permission Prompt** (FIXED)
   - **Severity:** High
   - **Location:** [`js/script.js#L544-L558`](file:///home/raja/Workspace/keepLocal/js/script.js#L544-L558) (`openWorkspace`) & [`js/script.js#L1048-L1062`](file:///home/raja/Workspace/keepLocal/js/script.js#L1048-L1062) (`syncWorkspace`)
   - **Problem Description:** When a page reloads, browsers do not automatically grant read-write access to directory handles retrieved from IndexedDB without user activation. `queryPermission()` returns `"prompt"`. In `syncWorkspace()`, `workspaceHandle.entries()` throws a `NotAllowedError`. The error is silently swallowed by `console.warn("Sync:", e);`. Meanwhile, the UI status badge still displays the folder name in green as if connected.
   - **Impact:** The user believes files are being synced to their system, but disk sync is completely dead.
   - **How to Fix:** If `queryPermission` returns anything other than `"granted"`, mark `workspaceHandle` as `needsPermission: true`, update the status badge to say "Click to Re-authorize Folder", and call `requestPermission()` on the first user click.
 
-- [ ] **FS-04: `resyncFromDisk` Deselects and Closes Currently Active File**
+- [x] **FS-04: `resyncFromDisk` Deselects and Closes Currently Active File** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L978-L997`](file:///home/raja/Workspace/keepLocal/js/script.js#L978-L997)
   - **Problem Description:** In `resyncFromDisk()`, line 991 hardcodes `selectedId = null; render(); await loadFile();`. Even when the active file still exists on disk, clicking refresh closes the file and clears the editor, forcing the user to find and reopen their note from the sidebar.

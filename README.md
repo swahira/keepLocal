@@ -34,9 +34,11 @@ localKeep is built on the principle of absolute privacy:
 Since localKeep is a pure client-side application, you can run it anywhere:
 
 1. **Clone the repository**:
+
    ```bash
    git clone https://github.com/swahira/localKeep.git
    ```
+
 2. **Open `index.html`**:
    Simply open the `index.html` file in any modern web browser.
 
@@ -45,7 +47,7 @@ Alternatively, you can host it on **GitHub Pages**, **Vercel**, or any static ho
 ## Usage
 
 | Action | How |
-|---|---|
+| --- | --- |
 | New file | Click **File** button or select a folder first to create inside it |
 | New folder | Click **Folder** button |
 | Rename | Click the edit icon on any file/folder in the tree |

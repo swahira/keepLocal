@@ -19,6 +19,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	let wsCardSearchQuery = "";
 	let importIdCounter = 0;
 	let workspaceHandle = null;  // FileSystemDirectoryHandle
+	let fsPermissionGranted = false; // true if workspaceHandle has granted readwrite permission
 	let editorMode = "block";
 	let editorInstance = null;
 	let isInitEditor = false;
@@ -560,6 +561,52 @@ document.addEventListener("DOMContentLoaded", async () => {
 		});
 	};
 
+	async function findWorkspaceByHandle(handle) {
+		if (!handle) return null;
+		for (const w of workspaces) {
+			if (w.folderName) {
+				try {
+					const storedHandle = await idbGet(`handle_${w.id}`);
+					if (storedHandle && typeof handle.isSameEntry === "function") {
+						if (await handle.isSameEntry(storedHandle)) {
+							return w;
+						}
+					}
+				} catch (e) {
+					console.warn("isSameEntry check failed:", e);
+				}
+			}
+		}
+		return null;
+	}
+
+	async function createNewWorkspaceFromHandle(handle) {
+		const ws = {
+			id: uid("ws"),
+			name: uniqueWsName(handle.name),
+			createdAt: Date.now(),
+			lastOpenedAt: Date.now(),
+			folderName: handle.name,
+			fileCount: 0
+		};
+		workspaces.push(ws);
+		saveWorkspaceMeta();
+
+		// Store handle
+		await idbSet(`handle_${ws.id}`, handle);
+		workspaceHandle = handle;
+		fsPermissionGranted = true;
+
+		// Read folder contents
+		const readFiles = await readDirectoryHandle(handle);
+		files = readFiles;
+		ws.fileCount = countAllFiles(files);
+		saveWorkspaceMeta();
+		saveWsFiles(ws.id);
+
+		await openWorkspace(ws.id, true /* skip file read, already done */);
+	}
+
 	window.openFolderWorkspace = async function () {
 		if (!supportsFS) {
 			showAlertModal("Not supported", "Folder sync requires Chrome, Edge, or Brave.");
@@ -567,39 +614,66 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });
-			// Check if a workspace already exists for this folder
-			const existingWs = workspaces.find(w => w.folderName === handle.name);
-			if (existingWs) {
+
+			// Check if a workspace already exists for this exact folder on disk
+			const matchedWs = await findWorkspaceByHandle(handle);
+			if (matchedWs) {
 				// Reconnect the handle and open it
 				workspaceHandle = handle;
-				await idbSet(`handle_${existingWs.id}`, handle);
-				await openWorkspace(existingWs.id);
+				fsPermissionGranted = true;
+				await idbSet(`handle_${matchedWs.id}`, handle);
+				await openWorkspace(matchedWs.id);
 				return;
 			}
+
+			// Check if an existing workspace had this folder name but lost its IndexedDB handle
+			const orphanedWs = workspaces.find(w => w.folderName === handle.name);
+			if (orphanedWs) {
+				const hasStoredHandle = await idbGet(`handle_${orphanedWs.id}`);
+				if (!hasStoredHandle) {
+					showChoiceModal({
+						title: "Reconnect Workspace?",
+						message: `A workspace named "${orphanedWs.name}" was previously linked to a folder named "${handle.name}", but its connection handle was lost. Would you like to reconnect it, or create a new workspace?`,
+						choices: [
+							{
+								label: `Reconnect to "${orphanedWs.name}"`,
+								description: "Update the existing workspace with this folder.",
+								action: "reconnect",
+								primary: true
+							},
+							{
+								label: "Create New Workspace",
+								description: "Keep the existing workspace separate and create a new one.",
+								action: "create"
+							},
+							{
+								label: "Cancel",
+								description: "Do not open this folder.",
+								action: "cancel"
+							}
+						],
+						onSelect: async (action) => {
+							if (action === "reconnect") {
+								workspaceHandle = handle;
+								fsPermissionGranted = true;
+								await idbSet(`handle_${orphanedWs.id}`, handle);
+								const readFiles = await readDirectoryHandle(handle);
+								files = readFiles;
+								orphanedWs.fileCount = countAllFiles(files);
+								saveWorkspaceMeta();
+								saveWsFiles(orphanedWs.id);
+								await openWorkspace(orphanedWs.id, true);
+							} else if (action === "create") {
+								await createNewWorkspaceFromHandle(handle);
+							}
+						}
+					});
+					return;
+				}
+			}
+
 			// Create new workspace from folder
-			const ws = {
-				id: uid("ws"),
-				name: uniqueWsName(handle.name),
-				createdAt: Date.now(),
-				lastOpenedAt: Date.now(),
-				folderName: handle.name,
-				fileCount: 0
-			};
-			workspaces.push(ws);
-			saveWorkspaceMeta();
-
-			// Store handle
-			await idbSet(`handle_${ws.id}`, handle);
-			workspaceHandle = handle;
-
-			// Read folder contents
-			const readFiles = await readDirectoryHandle(handle);
-			files = readFiles;
-			ws.fileCount = countAllFiles(files);
-			saveWorkspaceMeta();
-			saveWsFiles(ws.id);
-
-			await openWorkspace(ws.id, true /* skip file read, already done */);
+			await createNewWorkspaceFromHandle(handle);
 		} catch (err) {
 			if (err.name !== "AbortError") showAlertModal("Error", err.message);
 		}
@@ -728,17 +802,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		// Try to restore folder handle from IDB
 		workspaceHandle = null;
+		fsPermissionGranted = false;
 		if (supportsFS && ws.folderName) {
 			try {
 				const h = await idbGet(`handle_${wsId}`);
 				if (h) {
+					workspaceHandle = h;
 					const perm = await h.queryPermission({ mode: "readwrite" });
-					if (perm === "granted") {
-						workspaceHandle = h;
-					} else {
-						// Will need to request permission
-						workspaceHandle = h; // keep handle, request on first sync
-					}
+					fsPermissionGranted = (perm === "granted");
 				}
 			} catch (e) { console.warn("Could not restore handle:", e); }
 		}
@@ -785,6 +856,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		} catch (_) { }
 		activeWsId = null;
 		workspaceHandle = null;
+		fsPermissionGranted = false;
 		files = [];
 		selectedId = null;
 		pendingDeletions = [];
@@ -977,17 +1049,35 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (workspaceHandle) {
 			if (workspacePathLabel) workspacePathLabel.textContent = workspaceHandle.name;
 			if (wsFolderLabel) {
-				wsFolderLabel.textContent = workspaceHandle.name;
+				wsFolderLabel.textContent = fsPermissionGranted
+					? workspaceHandle.name
+					: `${workspaceHandle.name} (not authorized)`;
 				wsFolderLabel.classList.add("has-folder");
 			}
 			if (wsSyncBtn) wsSyncBtn.style.display = "flex";
 			if (wsStatusBadge) {
-				wsStatusBadge.textContent = workspaceHandle.name;
-				wsStatusBadge.classList.add("connected");
+				if (fsPermissionGranted) {
+					wsStatusBadge.textContent = workspaceHandle.name;
+					wsStatusBadge.className = "ws-status-badge connected";
+					wsStatusBadge.title = `Synced with folder "${workspaceHandle.name}"`;
+					wsStatusBadge.onclick = null;
+				} else {
+					wsStatusBadge.textContent = `⚠️ Re-authorize "${workspaceHandle.name}"`;
+					wsStatusBadge.className = "ws-status-badge needs-permission";
+					wsStatusBadge.title = `Click to re-authorize disk sync with "${workspaceHandle.name}"`;
+					wsStatusBadge.onclick = () => requestReauthorization();
+				}
 			}
 			if (saveWorkspaceBtn) {
-				saveWorkspaceBtn.innerHTML = '<i data-lucide="hard-drive" size="14"></i> <span>Change Folder</span>';
-				saveWorkspaceBtn.title = `Currently synced with "${workspaceHandle.name}" — click to connect a different folder`;
+				if (fsPermissionGranted) {
+					saveWorkspaceBtn.innerHTML = '<i data-lucide="hard-drive" size="14"></i> <span>Change Folder</span>';
+					saveWorkspaceBtn.title = `Currently synced with "${workspaceHandle.name}" — click to connect a different folder`;
+					saveWorkspaceBtn.onclick = () => saveWorkspace();
+				} else {
+					saveWorkspaceBtn.innerHTML = '<i data-lucide="shield-alert" size="14"></i> <span>Re-authorize Folder</span>';
+					saveWorkspaceBtn.title = `Click to grant permission to sync with "${workspaceHandle.name}"`;
+					saveWorkspaceBtn.onclick = () => requestReauthorization();
+				}
 			}
 			pathBar?.classList.add("has-folder");
 		} else {
@@ -1010,6 +1100,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 		checkStorageQuota();
 		if (window.lucide) lucide.createIcons();
 	}
+
+	window.requestReauthorization = async function () {
+		if (!workspaceHandle) return;
+		try {
+			const perm = await workspaceHandle.requestPermission({ mode: "readwrite" });
+			if (perm === "granted") {
+				fsPermissionGranted = true;
+				updateFolderUI();
+				await syncWorkspace(true);
+			} else {
+				showAlertModal(
+					"Permission Required",
+					`Permission to access folder "${workspaceHandle.name}" was not granted. Notes will only be saved in browser storage until access is granted.`
+				);
+			}
+		} catch (err) {
+			showAlertModal("Authorization Error", err.message);
+		}
+	};
 
 	function initWorkspaceButton() {
 		if (!supportsFS) {
@@ -1055,6 +1164,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 		};
 		search(files);
 		return path;
+	}
+
+	function findNodeByPath(nodes, targetPath) {
+		const search = (items, curPath = "") => {
+			for (const item of items) {
+				const p = curPath ? `${curPath}/${item.name}` : item.name;
+				if (p === targetPath) return item;
+				if (item.children) {
+					const found = search(item.children, p);
+					if (found) return found;
+				}
+			}
+			return null;
+		};
+		return search(nodes);
 	}
 	function nameExistsInArray(arr, name, excludeId = null) {
 		return arr.some(n => n.name.toLowerCase() === name.toLowerCase() && n.id !== excludeId);
@@ -1240,10 +1364,38 @@ document.addEventListener("DOMContentLoaded", async () => {
 		await autoSaveCurrentFile();
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+
+			// Check if another workspace is already linked to this exact folder handle
+			const otherWs = await findWorkspaceByHandle(handle);
+			if (otherWs && otherWs.id !== activeWsId) {
+				const proceed = await new Promise(res => {
+					showChoiceModal({
+						title: "Folder Already Connected",
+						message: `The folder "${handle.name}" is already linked to another workspace ("${otherWs.name}"). Connecting it here will share this folder across both workspaces. Do you want to proceed?`,
+						choices: [
+							{
+								label: "Connect Anyway",
+								description: "Share this folder with both workspaces.",
+								action: "connect",
+								primary: true
+							},
+							{
+								label: "Cancel",
+								description: "Do not connect this folder.",
+								action: "cancel"
+							}
+						],
+						onSelect: action => res(action === "connect")
+					});
+				});
+				if (!proceed) return;
+			}
+
 			const readFiles = await readDirectoryHandle(handle);
 
 			const finalizeConnection = async (chosenFiles, pushToDisk = false) => {
 				workspaceHandle = handle;
+				fsPermissionGranted = true;
 				await idbSet(`handle_${activeWsId}`, handle);
 				updateWsMeta(activeWsId, { folderName: handle.name, fileCount: countAllFiles(chosenFiles) });
 				files = chosenFiles;
@@ -1320,28 +1472,60 @@ document.addEventListener("DOMContentLoaded", async () => {
 		await autoSaveCurrentFile();
 		try {
 			const perm = await workspaceHandle.requestPermission({ mode: "readwrite" });
-			if (perm !== "granted") { showAlertModal("Permission denied", "Could not access the folder."); return; }
-			files = await readDirectoryHandle(workspaceHandle);
+			if (perm !== "granted") {
+				fsPermissionGranted = false;
+				updateFolderUI();
+				showAlertModal("Permission denied", "Could not access the folder.");
+				return;
+			}
+			fsPermissionGranted = true;
+			updateFolderUI();
+
+			// Cancel pending debounced disk sync so stale memory isn't written back to disk
+			if (diskSyncTimer) {
+				clearTimeout(diskSyncTimer);
+				diskSyncTimer = null;
+			}
+			if (isSyncing) {
+				await new Promise(r => syncWaiters.push(r));
+			}
+
+			const prevSelectedId = selectedId;
+			const prevSelectedPath = selectedId ? getPath(selectedId).map(n => n.name).join("/") : null;
+
+			files = await readDirectoryHandle(workspaceHandle, files);
 			if (activeWsId) {
 				saveWsFiles(activeWsId);
 				updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
 			}
-			selectedId = null;
+
+			// Preserve selectedId if file still exists on disk
+			if (prevSelectedId && findNode(files, prevSelectedId)) {
+				selectedId = prevSelectedId;
+			} else if (prevSelectedPath) {
+				const found = findNodeByPath(files, prevSelectedPath);
+				selectedId = found ? found.id : null;
+			} else {
+				selectedId = null;
+			}
+
 			render();
 			await loadFile();
 			wsStatusBadge.textContent = "Synced ✓";
-			setTimeout(() => { wsStatusBadge.textContent = workspaceHandle.name; }, 1500);
+			setTimeout(() => {
+				if (workspaceHandle && fsPermissionGranted) wsStatusBadge.textContent = workspaceHandle.name;
+			}, 1500);
 		} catch (e) { showAlertModal("Sync error", e.message); }
 	};
 
-	async function readDirectoryHandle(dirHandle) {
+	async function readDirectoryHandle(dirHandle, existingNodes = null) {
 		const SKIP = new Set(["node_modules", ".git", ".svn", "dist", "build", "__pycache__", ".next", ".cache"]);
 		const TEXT_EXTS = new Set(["txt", "md", "js", "ts", "jsx", "tsx", "html", "css", "json", "yaml", "yml",
 			"toml", "xml", "csv", "sh", "bash", "py", "rb", "go", "rs", "java", "c", "cpp", "h", "php",
 			"vue", "svelte", "env", "gitignore", "dockerfile", "sql", "graphql", "mdx", "ini", "cfg", "conf", "log"]);
 		const result = [];
 
-		async function readDir(handle, arr) {
+		async function readDir(handle, arr, existingArr = null) {
 			const entries = [];
 			for await (const [name, entry] of handle.entries()) entries.push([name, entry]);
 			entries.sort((a, b) => {
@@ -1350,23 +1534,39 @@ document.addEventListener("DOMContentLoaded", async () => {
 			});
 			for (const [name, entry] of entries) {
 				if (name.startsWith(".")) continue;
+				const matchedExisting = Array.isArray(existingArr)
+					? existingArr.find(n => n.name === name && (n.type === (entry.kind === "directory" ? "folder" : "file")))
+					: null;
+
 				if (entry.kind === "directory") {
 					if (SKIP.has(name)) continue;
 					const children = [];
-					await readDir(entry, children);
-					arr.push({ id: uid("folder"), name, type: "folder", isOpen: false, children });
+					await readDir(entry, children, matchedExisting?.children);
+					arr.push({
+						id: matchedExisting?.id || uid("folder"),
+						name,
+						type: "folder",
+						isOpen: matchedExisting ? !!matchedExisting.isOpen : false,
+						children
+					});
 				} else {
 					const ext = name.split(".").pop()?.toLowerCase();
 					if (!TEXT_EXTS.has(ext)) continue;
 					try {
 						const f = await entry.getFile();
 						const content = await f.text();
-						arr.push({ id: uid("file"), name, type: "file", content, _diskContent: content });
+						arr.push({
+							id: matchedExisting?.id || uid("file"),
+							name,
+							type: "file",
+							content,
+							_diskContent: content
+						});
 					} catch (e) { console.warn("Skip:", name, e); }
 				}
 			}
 		}
-		await readDir(dirHandle, result);
+		await readDir(dirHandle, result, existingNodes);
 		return result;
 	}
 
@@ -1422,6 +1622,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	async function performDiskSync() {
 		if (!workspaceHandle) return;
+		if (!fsPermissionGranted) {
+			updateFolderUI();
+			return;
+		}
 		if (isSyncing) {
 			syncPending = true;
 			return new Promise((resolve) => {
@@ -1446,11 +1650,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 						}
 						await dir.removeEntry(item.name, { recursive: true });
 					} catch (err) {
-						if (err.name !== "NotFoundError") {
+						if (err.name === "NotAllowedError") {
+							fsPermissionGranted = false;
+							updateFolderUI();
+							remaining.push(item);
+						} else if (err.name !== "NotFoundError") {
 							console.warn("Could not remove entry from disk:", item, err);
-							if (err.name === "NotAllowedError") {
-								remaining.push(item);
-							}
 						}
 					}
 				}
@@ -1461,16 +1666,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 			// Write managed files to disk (with dirty checking)
 			await saveNodes(workspaceHandle, files);
 
-			if (wsStatusBadge && workspaceHandle) {
+			if (wsStatusBadge && workspaceHandle && fsPermissionGranted) {
 				wsStatusBadge.textContent = "Saved ✓";
 				setTimeout(() => {
-					if (workspaceHandle && !isSyncing && !syncPending) {
+					if (workspaceHandle && fsPermissionGranted && !isSyncing && !syncPending) {
 						wsStatusBadge.textContent = workspaceHandle.name;
 					}
 				}, 1500);
 			}
 		} catch (e) {
-			console.warn("Sync error:", e);
+			if (e.name === "NotAllowedError") {
+				fsPermissionGranted = false;
+				updateFolderUI();
+			} else {
+				console.warn("Sync error:", e);
+			}
 		} finally {
 			isSyncing = false;
 			const waiters = [...syncWaiters];
@@ -2557,10 +2767,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (workspaceHandle) {
 				await autoSaveCurrentFile();
 				persistCurrent();
-				await syncWorkspace();
-				const prev = wsStatusBadge.textContent;
-				wsStatusBadge.textContent = "Saved ✓";
-				setTimeout(() => { wsStatusBadge.textContent = workspaceHandle.name; }, 1500);
+				if (!fsPermissionGranted) {
+					await requestReauthorization();
+				} else {
+					await syncWorkspace(true);
+					const prev = wsStatusBadge.textContent;
+					wsStatusBadge.textContent = "Saved ✓";
+					setTimeout(() => {
+						if (workspaceHandle && fsPermissionGranted) wsStatusBadge.textContent = workspaceHandle.name;
+					}, 1500);
+				}
 			} else {
 				saveWorkspace();
 			}

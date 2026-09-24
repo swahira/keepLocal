@@ -1459,6 +1459,25 @@ button {
 	border-color: var(--accent-color);
 }
 
+.ws-status-badge.needs-permission {
+	background: rgba(234, 179, 8, 0.15);
+	color: #eab308;
+	border-color: rgba(234, 179, 8, 0.5);
+	cursor: pointer;
+	font-weight: 500;
+	animation: pulse-badge 2.5s infinite ease-in-out;
+}
+
+.ws-status-badge.needs-permission:hover {
+	background: rgba(234, 179, 8, 0.25);
+	color: #facc15;
+}
+
+@keyframes pulse-badge {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.7; }
+}
+
 /* ============================================================
    MODAL
    ============================================================ */
