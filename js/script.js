@@ -2444,11 +2444,60 @@ document.addEventListener("DOMContentLoaded", async () => {
 				continue;
 			}
 
-			if (t.startsWith("#### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } }); }
+			// Horizontal divider (delimiter): ---, ***, ___
+			if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(t)) {
+				listStack = [];
+				blocks.push({ type: "delimiter", data: {} });
+				continue;
+			}
+
+			// Standalone image: ![alt](url)
+			const imgMatch = t.match(/^!\[([^\]]*)\]\(((?:[^()]+|\([^()]*\)+))\)$/);
+			if (imgMatch) {
+				listStack = [];
+				blocks.push({
+					type: "image",
+					data: {
+						url: imgMatch[2],
+						caption: md2h(imgMatch[1])
+					}
+				});
+				continue;
+			}
+
+			// Headings H1 to H6
+			if (t.startsWith("###### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(7)), level: 6 } }); }
+			else if (t.startsWith("##### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(6)), level: 5 } }); }
+			else if (t.startsWith("#### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } }); }
 			else if (t.startsWith("### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } }); }
 			else if (t.startsWith("## ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } }); }
 			else if (t.startsWith("# ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(2)), level: 1 } }); }
-			else if (t.startsWith("> ")) { listStack = []; blocks.push({ type: "quote", data: { text: md2h(t.slice(2)), caption: "" } }); }
+			// Alerts / Callouts: > [!NOTE] or > [!WARNING] or > [!TIP] etc.
+			else if (/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(t)) {
+				listStack = [];
+				const alertMatch = t.match(/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i);
+				const alertType = alertMatch[1].toUpperCase();
+				const alertTitle = alertMatch[2] ? md2h(alertMatch[2]) : (alertType.charAt(0) + alertType.slice(1).toLowerCase());
+				blocks.push({
+					type: "warning",
+					data: {
+						title: alertTitle,
+						message: ""
+					}
+				});
+			}
+			else if (t.startsWith("> ")) {
+				listStack = [];
+				const quoteText = md2h(t.slice(2));
+				const last = blocks[blocks.length - 1];
+				if (last?.type === "warning") {
+					last.data.message = last.data.message ? (last.data.message + "<br>" + quoteText) : quoteText;
+				} else if (last?.type === "quote") {
+					last.data.text = last.data.text ? (last.data.text + "<br>" + quoteText) : quoteText;
+				} else {
+					blocks.push({ type: "quote", data: { text: quoteText, caption: "" } });
+				}
+			}
 			else if (/^[ \t]*- \[[ xX]\] /.test(line)) {
 				listStack = [];
 				const checkMatch = line.match(/^[ \t]*- \[([ xX])\]\s*(.*)/);
@@ -2500,6 +2549,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (!s) return "";
 		// Escape raw HTML entities first to prevent raw HTML/script injection (MD-01)
 		let res = escHtml(s);
+		// Restore allowed safe tags: <u> and <mark>
+		res = res.replace(/&lt;u&gt;(.*?)&lt;\/u&gt;/gi, '<u class="cdx-underline">$1</u>');
+		res = res.replace(/&lt;mark(?: class="cdx-marker")?&gt;(.*?)&lt;\/mark&gt;/gi, '<mark class="cdx-marker">$1</mark>');
+		// Markdown highlight syntax: ==text== -> <mark class="cdx-marker">text</mark>
+		res = res.replace(/==([^=]+)==/g, '<mark class="cdx-marker">$1</mark>');
 		// Convert Markdown image links ![alt](url)
 		res = res.replace(/!\[([^\]]*)\]\(((?:[^()]+|\([^()]*\))+)\)/g, (match, alt, url) => {
 			const safeUrl = sanitizeUrl(url);
@@ -2522,17 +2576,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function h2md(s) {
 		if (!s) return "";
 		return s
-			.replace(/<img[^>]*src="(.*?)"[^>]*alt="(.*?)"[^>]*>/gi, "![$2]($1)")
-			.replace(/<img[^>]*src="(.*?)"[^>]*>/gi, "![]($1)")
+			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*>/gi, "![$2]($1)")
+			.replace(/<img\s+[^>]*alt="([^"]*)"[^>]*src="([^"]*)"[^>]*>/gi, "![$1]($2)")
+			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*>/gi, "![]($1)")
 			.replace(/<a [^>]*href="(.*?)"[^>]*>(.*?)<\/a>/gi, (match, url, text) => {
 				if (url === "#") return text;
 				return `[${text}](${url})`;
 			})
+			.replace(/<mark[^>]*>(.*?)<\/mark>/gi, "==$1==")
+			.replace(/<u[^>]*>(.*?)<\/u>/gi, "%%%U_OPEN%%%$1%%%U_CLOSE%%%")
 			.replace(/<b>(.*?)<\/b>/gi, "**$1**").replace(/<strong>(.*?)<\/strong>/gi, "**$1**")
 			.replace(/<i>(.*?)<\/i>/gi, "*$1*").replace(/<em>(.*?)<\/em>/gi, "*$1*")
 			.replace(/<code[^>]*>(.*?)<\/code>/gi, "`$1`")
+			.replace(/<br\s*\/?>/gi, "\n")
 			.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
-			.replace(/<[^>]+>/g, "");
+			.replace(/<[^>]+>/g, "")
+			.replace(/%%%U_OPEN%%%/g, "<u>").replace(/%%%U_CLOSE%%%/g, "</u>");
 	}
 
 	function blocksToText(data) {
@@ -2542,6 +2601,37 @@ document.addEventListener("DOMContentLoaded", async () => {
 			switch (b.type) {
 				case "header": lines.push("#".repeat(b.data.level || 1) + " " + h2md(b.data.text)); break;
 				case "paragraph": lines.push(h2md(b.data.text)); break;
+				case "delimiter": lines.push("---"); break;
+				case "image": {
+					const cap = h2md(b.data.caption || "").trim();
+					lines.push(`![${cap}](${b.data.url || ""})`);
+					break;
+				}
+				case "warning": {
+					const title = h2md(b.data.title || "").trim();
+					const msg = h2md(b.data.message || "").trim();
+					if (title) {
+						lines.push(`> [!NOTE] ${title}`);
+					} else {
+						lines.push(`> [!NOTE]`);
+					}
+					if (msg) {
+						msg.split("\n").forEach(l => lines.push(`> ${l}`));
+					}
+					break;
+				}
+				case "quote": {
+					const qText = h2md(b.data.text || "");
+					if (qText) {
+						qText.split("\n").forEach(l => lines.push(`> ${l}`));
+					} else {
+						lines.push(">");
+					}
+					if (b.data.caption) {
+						lines.push(`> — ${h2md(b.data.caption)}`);
+					}
+					break;
+				}
 				case "list":
 					(function extractItems(items, depth = 0, style = b.data.style || "unordered") {
 						(items || []).forEach((it, i) => {
@@ -2556,7 +2646,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 					})(b.data.items);
 					break;
 				case "checklist": (b.data.items || []).forEach(it => lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`)); break;
-				case "quote": lines.push(`> ${h2md(b.data.text)}`); break;
 				case "code":
 					const lang = b.data?.language ? b.data.language.trim() : "";
 					lines.push(`\`\`\`${lang}`, b.data?.code || "", "```");
@@ -2577,6 +2666,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 		return lines.join("\n").trim();
 	}
+
+	window.textToBlocks = textToBlocks;
+	window.blocksToText = blocksToText;
 
 	// ============================================================
 	// EDITOR.JS
@@ -2607,12 +2699,83 @@ document.addEventListener("DOMContentLoaded", async () => {
 		editorjsWrapper.appendChild(holder);
 
 		const tools = {};
-		tools.paragraph = { config: { preserveBlank: true }, inlineToolbar: true }; // ← NEW
-		if (typeof Header !== "undefined") tools.header = { class: Header };
+		tools.paragraph = { config: { preserveBlank: true }, inlineToolbar: true };
+		if (typeof Header !== "undefined") {
+			tools.header = {
+				class: Header,
+				config: {
+					placeholder: "Heading",
+					levels: [1, 2, 3, 4, 5, 6],
+					defaultLevel: 2
+				},
+				inlineToolbar: true
+			};
+		}
 		const ListTool = typeof NestedList !== "undefined" ? NestedList : (typeof List !== "undefined" ? List : null);
 		if (ListTool) tools.list = { class: ListTool, inlineToolbar: true };
 		if (typeof Checklist !== "undefined") tools.checklist = { class: Checklist, inlineToolbar: true };
 		if (typeof Quote !== "undefined") tools.quote = { class: Quote, inlineToolbar: true };
+		if (typeof Warning !== "undefined") {
+			class CustomWarningTool extends Warning {
+				static get toolbox() {
+					return {
+						icon: Warning.toolbox.icon,
+						title: "Callout"
+					};
+				}
+			}
+			tools.warning = {
+				class: CustomWarningTool,
+				inlineToolbar: true,
+				config: {
+					titlePlaceholder: "Title",
+					messagePlaceholder: "Message"
+				}
+			};
+		}
+		if (typeof Delimiter !== "undefined") {
+			class CustomDelimiterTool extends Delimiter {
+				static get toolbox() {
+					return {
+						icon: Delimiter.toolbox.icon,
+						title: "Divider"
+					};
+				}
+			}
+			tools.delimiter = { class: CustomDelimiterTool };
+		}
+		if (typeof SimpleImage !== "undefined") {
+			class CustomImageTool extends SimpleImage {
+				static get toolbox() {
+					return {
+						icon: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+						title: "Image"
+					};
+				}
+				render() {
+					const container = super.render();
+					if (!this.data.url) {
+						const urlInput = document.createElement("input");
+						urlInput.className = "cdx-input ce-image-url-input";
+						urlInput.placeholder = "Paste image URL and press Enter…";
+						urlInput.style.cssText = "margin-bottom: 8px;";
+						urlInput.addEventListener("keydown", (e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								const val = urlInput.value.trim();
+								if (val) {
+									this.data = { url: val, caption: this.data.caption || "" };
+									urlInput.remove();
+								}
+							}
+						});
+						container.prepend(urlInput);
+					}
+					return container;
+				}
+			}
+			tools.image = { class: CustomImageTool, inlineToolbar: true };
+		}
 		if (typeof CodeTool !== "undefined") {
 			class CustomCodeTool extends CodeTool {
 				constructor({ data, config, api, readOnly }) {
@@ -2652,6 +2815,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 			tools.code = { class: CustomCodeTool };
 		}
 		if (typeof InlineCode !== "undefined") tools.inlineCode = { class: InlineCode };
+		if (typeof Marker !== "undefined") tools.marker = { class: Marker };
+		if (typeof Underline !== "undefined") tools.underline = { class: Underline };
 		if (typeof Table !== "undefined") tools.table = { class: Table, inlineToolbar: true, config: { rows: 2, cols: 2 } };
 
 		editorInstance = new EditorJS({
