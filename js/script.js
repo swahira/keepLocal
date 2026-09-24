@@ -1907,8 +1907,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const commit = () => {
 			if (isCancelled) return;
 			inlineRenameId = null;
-			const newName = input.value.trim();
 			if (!newName || newName === n.name) { render(); return; }
+			if (newName === "." || newName === ".." || /[\\/:*?"<>|]/.test(newName)) {
+				showAlertModal("Invalid name", "Names cannot be '.' or '..' and cannot contain any of the following characters: \\ / : * ? \" < > |");
+				render();
+				return;
+			}
 			const p = findParent(files, id);
 			const arr = p ? p.children : files;
 			if (nameExistsInArray(arr, newName, id)) {
@@ -2138,6 +2142,20 @@ document.addEventListener("DOMContentLoaded", async () => {
 			input.focus();
 		} else if (isHidden && input) {
 			input.value = "";
+			input.blur();
+			searchQuery = "";
+			render();
+		}
+	};
+
+	window.closeSearchBar = function () {
+		const wrapper = document.getElementById("searchBarWrapper");
+		const input = document.getElementById("searchInput");
+		if (!wrapper) return;
+		wrapper.classList.add("hidden");
+		if (input) {
+			input.value = "";
+			input.blur();
 			searchQuery = "";
 			render();
 		}
@@ -2147,6 +2165,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 		searchQuery = document.getElementById("searchInput").value.toLowerCase();
 		render();
 	};
+
+	const searchInputEl = document.getElementById("searchInput");
+	if (searchInputEl) {
+		searchInputEl.addEventListener("keydown", (e) => {
+			if (e.key === "Escape") {
+				closeSearchBar();
+			}
+		});
+	}
 
 	// ============================================================
 	// EDITOR TABS (VS Code Style)
@@ -2273,13 +2300,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	function renderTree(nodes, container, depth) {
 		for (const node of nodes) {
-			let show = true, hasChild = false;
+			let show = true, hasChild = false, nameMatches = false;
 			if (searchQuery) {
-				if (node.type === "file")
+				if (node.type === "file") {
 					show = node.name.toLowerCase().includes(searchQuery) || (node.content?.toLowerCase().includes(searchQuery));
-				else {
+				} else {
+					nameMatches = node.name.toLowerCase().includes(searchQuery);
 					hasChild = checkMatchingChild(node, searchQuery);
-					show = hasChild;
+					show = nameMatches || hasChild;
 				}
 			}
 			if (!show) continue;
@@ -2392,7 +2420,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		return folder.children.some(c =>
 			c.type === "file"
 				? c.name.toLowerCase().includes(q) || (c.content?.toLowerCase().includes(q))
-				: checkMatchingChild(c, q)
+				: (c.name.toLowerCase().includes(q) || checkMatchingChild(c, q))
 		);
 	}
 

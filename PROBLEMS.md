@@ -381,7 +381,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 
 ## 6. Search, Navigation & Explorer (Medium / Low)
 
-- [ ] **SRCH-01: Explorer File Search Hides Folders Matching the Search Query**
+- [x] **SRCH-01: Explorer File Search Hides Folders Matching the Search Query** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1492-L1496`](file:///home/raja/Workspace/keepLocal/js/script.js#L1492-L1496) & [`js/script.js#L1604-L1611`](file:///home/raja/Workspace/keepLocal/js/script.js#L1604-L1611)
   - **Problem Description:** In `renderTree()`, folders are only displayed if `checkMatchingChild()` returns true. If a folder's name matches the query (e.g. user searches for `assets`), but its child files do not contain that word, the folder itself is hidden!
@@ -394,14 +394,14 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
     show = nameMatches || hasChild;
     ```
 
-- [ ] **SRCH-02: Search Input in Sidebar Lacks Escape Key Handler**
+- [x] **SRCH-02: Search Input in Sidebar Lacks Escape Key Handler** (FIXED)
   - **Severity:** Low
   - **Location:** [`index.html#L207`](file:///home/raja/Workspace/keepLocal/index.html#L207) & [`js/script.js#L1359-L1376`](file:///home/raja/Workspace/keepLocal/js/script.js#L1359-L1376)
   - **Problem Description:** Unlike the welcome screen search input which closes on `Escape`, `#searchInput` in the sidebar has no keydown listener. Pressing `Escape` does not clear or close the search bar.
   - **Impact:** Clunky search UX requiring manual mouse clicks to dismiss.
   - **How to Fix:** Add a `keydown` listener on `#searchInput` for `e.key === "Escape"` that calls `toggleSearchBar()`.
 
-- [ ] **SRCH-03: No Filename Character Validation Allows Illegal Path Separators**
+- [x] **SRCH-03: No Filename Character Validation Allows Illegal Path Separators** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1178-L1187`](file:///home/raja/Workspace/keepLocal/js/script.js#L1178-L1187)
   - **Problem Description:** There is no input sanitization when renaming or creating files. If a user enters `notes/v1.md` or `test:file.md`, the File System Access API throws a `TypeError` when calling `getFileHandle()`.
