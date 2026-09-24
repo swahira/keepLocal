@@ -336,35 +336,35 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 
 ## 5. ZIP Import & Export System (Medium)
 
-- [ ] **ZIP-01: Windows Backslash Path Splitting Fails on Import**
+- [x] **ZIP-01: Windows Backslash Path Splitting Fails on Import** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L464`](file:///home/raja/Workspace/keepLocal/js/script.js#L464) & [`js/script.js#L1239`](file:///home/raja/Workspace/keepLocal/js/script.js#L1239)
   - **Problem Description:** ZIP archives created on Windows frequently use backslashes (`\`) as directory separators. The import logic only splits on forward slashes (`rel.split("/")`). As a result, paths like `folder\note.md` are not recognized as directories and are imported as a single file named `folder\note.md`.
   - **Impact:** Broken folder structures when importing ZIP archives generated on Windows.
   - **How to Fix:** Normalize paths with `rel.replace(/\\/g, "/").split("/")`.
 
-- [ ] **ZIP-02: Async Concurrency Race in ZIP Import Creates Duplicate Folders**
+- [x] **ZIP-02: Async Concurrency Race in ZIP Import Creates Duplicate Folders** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L460-L481`](file:///home/raja/Workspace/keepLocal/js/script.js#L460-L481) & [`js/script.js#L1235-L1254`](file:///home/raja/Workspace/keepLocal/js/script.js#L1235-L1254)
   - **Problem Description:** Inside `zip.forEach`, an async function is launched for each entry and pushed into `promises`. Because entries run concurrently, two files in the same directory (e.g. `docs/a.md` and `docs/b.md`) both evaluate `if (!folders[fp])` simultaneously before either folder is created. Duplicate folders are created and added to `files`.
   - **Impact:** Duplicate identical folders appear in the tree on import.
   - **How to Fix:** Pre-process the zip entries synchronously to build the folder hierarchy before asynchronously loading file text contents.
 
-- [ ] **ZIP-03: Corrupted ZIP Import Leaves Zombie Workspace on Welcome Screen**
+- [x] **ZIP-03: Corrupted ZIP Import Leaves Zombie Workspace on Welcome Screen** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L435-L457`](file:///home/raja/Workspace/keepLocal/js/script.js#L435-L457) (`handleWelcomeImport`)
   - **Problem Description:** In `handleWelcomeImport`, the new workspace object `ws` is pushed to `workspaces` and saved to `localStorage` *before* `JSZip.loadAsync()` finishes. If the uploaded file is corrupt or not a valid ZIP, `loadAsync` throws an unhandled rejection, leaving an empty, broken workspace on the welcome screen.
   - **Impact:** Corrupted workspace list requiring manual deletion.
   - **How to Fix:** Wrap `JSZip.loadAsync` in a `try...catch` block. Only instantiate and persist the workspace after the zip has loaded successfully.
 
-- [ ] **ZIP-04: ZIP Export Omits Active File's Unsaved Changes**
+- [x] **ZIP-04: ZIP Export Omits Active File's Unsaved Changes** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1200-L1213`](file:///home/raja/Workspace/keepLocal/js/script.js#L1200-L1213) (`exportAll`, `exportFolder`)
   - **Problem Description:** Clicking "Export ZIP" immediately reads `files` from memory without calling `await autoSaveCurrentFile()`. Any recent edits in the active editor tab are missing from the exported archive.
   - **Impact:** Incomplete or stale backup archives.
   - **How to Fix:** Add `await autoSaveCurrentFile();` at the beginning of `exportAll` and `exportFolder`.
 
-- [ ] **ZIP-05: `downloadBlob` Fails in Firefox Due to Detached Anchor Tag**
+- [x] **ZIP-05: `downloadBlob` Fails in Firefox Due to Detached Anchor Tag** (FIXED)
   - **Severity:** Low
   - **Location:** [`js/script.js#L1220-L1225`](file:///home/raja/Workspace/keepLocal/js/script.js#L1220-L1225) (`downloadBlob`)
   - **Problem Description:** In Firefox, calling `a.click()` on an anchor element that is not appended to the document body often fails silently.

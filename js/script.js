@@ -689,60 +689,77 @@ document.addEventListener("DOMContentLoaded", async () => {
 	window.handleWelcomeImport = async function (event) {
 		const file = event.target.files[0];
 		if (!file) return;
-		// Create workspace named after the zip
-		const wsName = uniqueWsName(file.name.replace(/\.zip$/i, ""));
-		const ws = {
-			id: uid("ws"),
-			name: wsName,
-			createdAt: Date.now(),
-			lastOpenedAt: Date.now(),
-			folderName: null,
-			fileCount: 0
-		};
-		workspaces.push(ws);
-		saveWorkspaceMeta();
-		activeWsId = ws.id;
 
-		// Import the zip
-		await new Promise(resolve => {
-			const reader = new FileReader();
-			reader.onload = async (e) => {
-				const zip = await JSZip.loadAsync(e.target.result);
-				files = [];
-				const promises = [];
-				const folders = { "": files };
-				zip.forEach((relativePath, zipEntry) => {
-					if (zipEntry.dir) return;
-					promises.push((async () => {
-						const content = await zipEntry.async("string");
-						const parts = relativePath.split("/");
-						const fname = parts.pop();
-						if (!fname) return;
-						let arr = files, curPath = "";
-						for (const dir of parts) {
-							if (!dir) continue;
-							const fp = curPath ? `${curPath}/${dir}` : dir;
-							if (!folders[fp]) {
-								const nf = { id: uid("folder"), name: dir, type: "folder", isOpen: true, children: [] };
-								arr.push(nf); folders[fp] = nf.children;
-							}
-							arr = folders[fp]; curPath = fp;
+		try {
+			const buffer = await file.arrayBuffer();
+			const zip = await JSZip.loadAsync(buffer);
+			const importedFiles = [];
+			const folders = { "": importedFiles };
+
+			const fileEntries = [];
+			zip.forEach((rel, entry) => {
+				if (entry.dir) return;
+				const normalized = rel.replace(/\\/g, "/");
+				fileEntries.push({ path: normalized, entry });
+			});
+
+			// Synchronously build folder hierarchy to prevent race conditions (ZIP-01, ZIP-02)
+			for (const { path } of fileEntries) {
+				const parts = path.split("/");
+				const fname = parts.pop();
+				if (!fname) continue;
+				let arr = importedFiles, curPath = "";
+				for (const dir of parts) {
+					if (!dir) continue;
+					const fp = curPath ? `${curPath}/${dir}` : dir;
+					if (!folders[fp]) {
+						let existingFolder = arr.find(n => n.type === "folder" && n.name === dir);
+						if (!existingFolder) {
+							existingFolder = { id: uid("folder"), name: dir, type: "folder", isOpen: true, children: [] };
+							arr.push(existingFolder);
 						}
-						if (!nameExistsInArray(arr, fname))
-							arr.push({ id: uid("file"), name: fname, type: "file", content });
-					})());
-				});
-				await Promise.all(promises);
-				resolve();
-			};
-			reader.readAsArrayBuffer(file);
-		});
+						folders[fp] = existingFolder.children;
+					}
+					arr = folders[fp];
+					curPath = fp;
+				}
+			}
 
-		event.target.value = "";
-		ws.fileCount = countAllFiles(files);
-		saveWorkspaceMeta();
-		saveWsFiles(ws.id);
-		await openWorkspace(ws.id, true);
+			// Asynchronously read all file contents
+			await Promise.all(fileEntries.map(async ({ path, entry }) => {
+				const content = await entry.async("string");
+				const parts = path.split("/");
+				const fname = parts.pop();
+				if (!fname) return;
+				const dirPath = parts.filter(Boolean).join("/");
+				const arr = folders[dirPath] || importedFiles;
+				if (!nameExistsInArray(arr, fname)) {
+					arr.push({ id: uid("file"), name: fname, type: "file", content });
+				}
+			}));
+
+			// Only instantiate and persist workspace after successful load (ZIP-03)
+			const wsName = uniqueWsName(file.name.replace(/\.zip$/i, ""));
+			const ws = {
+				id: uid("ws"),
+				name: wsName,
+				createdAt: Date.now(),
+				lastOpenedAt: Date.now(),
+				folderName: null,
+				fileCount: countAllFiles(importedFiles)
+			};
+			workspaces.push(ws);
+			files = importedFiles;
+			activeWsId = ws.id;
+			saveWorkspaceMeta();
+			saveWsFiles(ws.id);
+			await openWorkspace(ws.id, true);
+		} catch (err) {
+			console.error("Failed to import ZIP:", err);
+			showAlertModal("Import Failed", "The selected file is not a valid ZIP archive: " + (err.message || err));
+		} finally {
+			event.target.value = "";
+		}
 	};
 
 	window.renameWorkspace = function (wsId) {
@@ -1917,12 +1934,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// EXPORT / IMPORT
 	// ============================================================
 	window.exportAll = async function () {
+		await autoSaveCurrentFile();
 		const zip = new JSZip();
 		addToZip(zip, files);
 		const blob = await zip.generateAsync({ type: "blob" });
 		downloadBlob(blob, `${sidebarWsName?.textContent || "export"}.zip`);
 	};
 	window.exportFolder = async function (id) {
+		await autoSaveCurrentFile();
 		const n = findNode(files, id);
 		if (!n || n.type !== "folder") return;
 		const zip = new JSZip();
@@ -1939,44 +1958,78 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function downloadBlob(blob, name) {
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement("a");
-		a.href = url; a.download = name; a.click();
-		setTimeout(() => URL.revokeObjectURL(url), 1000);
+		a.href = url;
+		a.download = name;
+		a.style.display = "none";
+		document.body.appendChild(a);
+		a.click();
+		setTimeout(() => {
+			if (a.parentNode) a.parentNode.removeChild(a);
+			URL.revokeObjectURL(url);
+		}, 1000);
 	}
 
-	window.handleImport = function (event) {
+	window.handleImport = async function (event) {
 		const file = event.target.files[0];
 		if (!file) return;
-		const reader = new FileReader();
-		reader.onload = async (e) => {
-			const zip = await JSZip.loadAsync(e.target.result);
+
+		try {
+			const buffer = await file.arrayBuffer();
+			const zip = await JSZip.loadAsync(buffer);
 			const folders = { "": files };
-			const promises = [];
+
+			const fileEntries = [];
 			zip.forEach((rel, entry) => {
 				if (entry.dir) return;
-				promises.push((async () => {
-					const content = await entry.async("string");
-					const parts = rel.split("/"), fname = parts.pop();
-					if (!fname) return;
-					let arr = files, cp = "";
-					for (const dir of parts) {
-						if (!dir) continue;
-						const fp = cp ? `${cp}/${dir}` : dir;
-						if (!folders[fp]) {
-							const nf = { id: uid("folder"), name: dir, type: "folder", isOpen: true, children: [] };
-							arr.push(nf); folders[fp] = nf.children;
-						}
-						arr = folders[fp]; cp = fp;
-					}
-					if (!nameExistsInArray(arr, fname))
-						arr.push({ id: uid("file"), name: fname, type: "file", content });
-				})());
+				const normalized = rel.replace(/\\/g, "/");
+				fileEntries.push({ path: normalized, entry });
 			});
-			await Promise.all(promises);
-			persistCurrent(); render(); syncWorkspace();
+
+			// Synchronously build folder hierarchy to prevent race conditions (ZIP-01, ZIP-02)
+			for (const { path } of fileEntries) {
+				const parts = path.split("/");
+				const fname = parts.pop();
+				if (!fname) continue;
+				let arr = files, curPath = "";
+				for (const dir of parts) {
+					if (!dir) continue;
+					const fp = curPath ? `${curPath}/${dir}` : dir;
+					if (!folders[fp]) {
+						let existingFolder = arr.find(n => n.type === "folder" && n.name === dir);
+						if (!existingFolder) {
+							existingFolder = { id: uid("folder"), name: dir, type: "folder", isOpen: true, children: [] };
+							arr.push(existingFolder);
+						}
+						folders[fp] = existingFolder.children;
+					}
+					arr = folders[fp];
+					curPath = fp;
+				}
+			}
+
+			// Asynchronously read all file contents
+			await Promise.all(fileEntries.map(async ({ path, entry }) => {
+				const content = await entry.async("string");
+				const parts = path.split("/");
+				const fname = parts.pop();
+				if (!fname) return;
+				const dirPath = parts.filter(Boolean).join("/");
+				const arr = folders[dirPath] || files;
+				if (!nameExistsInArray(arr, fname)) {
+					arr.push({ id: uid("file"), name: fname, type: "file", content });
+				}
+			}));
+
+			persistCurrent();
+			render();
+			syncWorkspace();
+			showAlertModal("Import complete", "Imported successfully.");
+		} catch (err) {
+			console.error("Failed to import ZIP:", err);
+			showAlertModal("Import Failed", "The selected file is not a valid ZIP archive: " + (err.message || err));
+		} finally {
 			event.target.value = "";
-			showAlertModal("Import complete", `Imported successfully.`);
-		};
-		reader.readAsArrayBuffer(file);
+		}
 	};
 
 	// ============================================================
