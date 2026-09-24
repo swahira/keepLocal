@@ -58,6 +58,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// FEATURE DETECTION
 	// ============================================================
+	if (window.location.hostname === "0.0.0.0") {
+		const redirectUrl = `${window.location.protocol}//localhost:${window.location.port || 8000}${window.location.pathname}${window.location.search}${window.location.hash}`;
+		window.location.replace(redirectUrl);
+	}
+
+	const isSecure = window.isSecureContext;
 	const supportsFS = "showDirectoryPicker" in window;
 
 	// ============================================================
@@ -364,9 +370,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 		renderWorkspaceCards();
 		// FS banner
 		if (!supportsFS) {
-			document.getElementById("welcomeFsBanner").classList.remove("hidden");
-			document.getElementById("openFolderBtn").disabled = true;
-			document.getElementById("openFolderBtn").title = "Requires Chrome/Edge/Brave";
+			const fsBanner = document.getElementById("welcomeFsBanner");
+			if (fsBanner) {
+				fsBanner.classList.remove("hidden");
+				if (!isSecure) {
+					fsBanner.innerHTML = `<i data-lucide="alert-triangle" size="14"></i> Folder sync requires a Secure Context. Access via <a href="http://localhost:${location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
+					if (window.lucide) lucide.createIcons();
+				}
+			}
+			const openFolderBtn = document.getElementById("openFolderBtn");
+			if (openFolderBtn) {
+				openFolderBtn.disabled = true;
+				openFolderBtn.title = !isSecure ? "Requires Secure Context (localhost/HTTPS)" : "Requires Chrome/Edge/Brave";
+			}
 		}
 	}
 
@@ -617,7 +633,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	window.openFolderWorkspace = async function () {
 		if (!supportsFS) {
-			showAlertModal("Not supported", "Folder sync requires Chrome, Edge, or Brave.");
+			if (!isSecure) {
+				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${location.port || 8000}.`);
+			} else {
+				showAlertModal("Not supported", "Folder sync requires Chrome, Edge, or Brave.");
+			}
 			return;
 		}
 		try {
@@ -1131,8 +1151,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (!supportsFS) {
 			saveWorkspaceBtn.disabled = true;
 			saveWorkspaceBtn.classList.add("disabled");
-			saveWorkspaceBtn.title = "Folder sync requires Chrome, Edge, or Brave";
-			browserSupportMsg?.classList.remove("hidden");
+			saveWorkspaceBtn.title = !isSecure ? "Folder sync requires a Secure Context (localhost/HTTPS)" : "Folder sync requires Chrome, Edge, or Brave";
+			if (browserSupportMsg) {
+				browserSupportMsg.classList.remove("hidden");
+				if (!isSecure) {
+					browserSupportMsg.innerHTML = `⚠ Folder sync requires a Secure Context. Access via <a href="http://localhost:${location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
+				}
+			}
 		}
 	}
 
@@ -1430,7 +1455,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	window.saveWorkspace = async function () {
-		if (!supportsFS) { showAlertModal("Not supported", "Requires Chrome, Edge, or Brave."); return; }
+		if (!supportsFS) {
+			if (!isSecure) {
+				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${location.port || 8000}.`);
+			} else {
+				showAlertModal("Not supported", "Requires Chrome, Edge, or Brave.");
+			}
+			return;
+		}
 		await autoSaveCurrentFile();
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });

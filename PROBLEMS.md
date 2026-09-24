@@ -153,7 +153,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Annoying UX interruption and loss of editor context.
   - **How to Fix:** Preserve `selectedId`. Only reset `selectedId` if `findNode(files, selectedId)` is null after re-reading the directory.
 
-- [ ] **FS-05: False "Requires Chromium" Warning on `0.0.0.0` Due to Insecure Context (`python3 -m http.server`)**
+- [x] **FS-05: False "Requires Chromium" Warning on `0.0.0.0` Due to Insecure Context (`python3 -m http.server`)** (FIXED)
   - **Severity:** High
   - **Location:** [`js/script.js#L58`](file:///home/raja/Workspace/keepLocal/js/script.js#L58) (`supportsFS`), [`js/script.js#L180-L185`](file:///home/raja/Workspace/keepLocal/js/script.js#L180-L185), [`js/script.js#L808-L815`](file:///home/raja/Workspace/keepLocal/js/script.js#L808-L815), [`index.html#L99-L102`](file:///home/raja/Workspace/keepLocal/index.html#L99-L102), [`index.html#L222-L224`](file:///home/raja/Workspace/keepLocal/index.html#L222-L224)
   - **Problem Description:** When developers start a local test server using `python3 -m http.server`, the terminal outputs `Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...`. Under the W3C Secure Contexts specification, Chromium does **not** treat `0.0.0.0` as a trustworthy loopback address (only `127.0.0.1` and `localhost` are treated as secure). Consequently:
