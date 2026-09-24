@@ -998,6 +998,7 @@ button {
 	white-space: pre;
 	word-wrap: normal;
 	overflow: hidden;
+	scrollbar-gutter: stable;
 	pointer-events: none;
 
 	background: var(--bg-primary);
@@ -1029,6 +1030,7 @@ button {
 	tab-size: 4;
 
 	overflow: auto;
+	scrollbar-gutter: stable;
 	box-sizing: border-box;
 	z-index: 2;
 
@@ -1048,8 +1050,12 @@ button {
 	white-space: pre-wrap !important;
 	word-wrap: break-word !important;
 	overflow-wrap: break-word !important;
-	word-break: break-all !important;
+	word-break: normal !important;
 	overflow-x: hidden !important;
+}
+
+.word-wrap-active .line-numbers {
+	display: none;
 }
 
 /* Custom Modern Thin Scrollbars */
@@ -1148,7 +1154,7 @@ button {
 
 .editorjs-wrapper .ce-block,
 .editorjs-wrapper .ce-block__content,
-.editorjs-wrapper .cdx-block {
+.editorjs-wrapper .cdx-block:not(.ce-header) {
 	font-size: var(--editor-font-size) !important;
 }
 
@@ -1387,31 +1393,31 @@ button {
 }
 
 .editorjs-wrapper .ce-header {
-	font-size: calc(var(--editor-font-size) * 1.8);
+	font-size: calc(var(--editor-font-size) * 1.8) !important;
 }
 
 .editorjs-wrapper h1.ce-header {
-	font-size: calc(var(--editor-font-size) * 2.2);
+	font-size: calc(var(--editor-font-size) * 2.2) !important;
 }
 
 .editorjs-wrapper h2.ce-header {
-	font-size: calc(var(--editor-font-size) * 1.9);
+	font-size: calc(var(--editor-font-size) * 1.9) !important;
 }
 
 .editorjs-wrapper h3.ce-header {
-	font-size: calc(var(--editor-font-size) * 1.6);
+	font-size: calc(var(--editor-font-size) * 1.6) !important;
 }
 
 .editorjs-wrapper h4.ce-header {
-	font-size: calc(var(--editor-font-size) * 1.4);
+	font-size: calc(var(--editor-font-size) * 1.4) !important;
 }
 
 .editorjs-wrapper h5.ce-header {
-	font-size: calc(var(--editor-font-size) * 1.2);
+	font-size: calc(var(--editor-font-size) * 1.2) !important;
 }
 
 .editorjs-wrapper h6.ce-header {
-	font-size: var(--editor-font-size);
+	font-size: var(--editor-font-size) !important;
 }
 
 /* ============================================================

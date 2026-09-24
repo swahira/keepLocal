@@ -23,6 +23,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 	let editorMode = "block";
 	let editorInstance = null;
 	let isInitEditor = false;
+	let editorLoadedFileId = null;
+	let isAddingFile = false;
+	let isOpenTabInProgress = false;
 	let editorSaveTimer = null;
 	let draggedId = null;
 	let inlineRenameId = null;
@@ -859,6 +862,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		fsPermissionGranted = false;
 		files = [];
 		selectedId = null;
+		editorLoadedFileId = null;
 		pendingDeletions = [];
 		// Destroy editor instance to avoid memory leak
 		if (editorInstance) {
@@ -868,11 +872,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		showWelcome();
 	};
 
-	async function autoSaveCurrentFile(targetId = selectedId) {
+	async function autoSaveCurrentFile(targetId = null) {
 		clearTimeout(editorSaveTimer);
 		editorSaveTimer = null;
-		if (!targetId) return;
-		const f = findNode(files, targetId);
+		if (isInitEditor) return;
+		const idToSave = targetId || editorLoadedFileId || selectedId;
+		if (!idToSave) return;
+		const f = findNode(files, idToSave);
 		if (!f || f.type !== "file") return;
 		if (editorMode === "block" && editorInstance) {
 			try {
@@ -979,27 +985,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 				"important"
 			);
 
-			// Editor.js creates these elements dynamically
+			// Editor.js creates these elements dynamically (headings scale via CSS calc)
 			editorjsWrapper
 				.querySelectorAll(
-					".ce-paragraph, .cdx-block, .ce-code__textarea, " +
+					".ce-paragraph, .cdx-block:not(.ce-header), .ce-code__textarea, " +
 					".cdx-quote, .cdx-list, .cdx-checklist, .tc-cell"
 				)
 				.forEach(el => {
 					el.style.setProperty(
 						"font-size",
 						`${fontSize}px`,
-						"important"
-					);
-				});
-
-			// Headings
-			editorjsWrapper
-				.querySelectorAll(".ce-header")
-				.forEach(el => {
-					el.style.setProperty(
-						"font-size",
-						`${fontSize * 1.6}px`,
 						"important"
 					);
 				});
@@ -1182,6 +1177,20 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 	function nameExistsInArray(arr, name, excludeId = null) {
 		return arr.some(n => n.name.toLowerCase() === name.toLowerCase() && n.id !== excludeId);
+	}
+
+	function uniqueNodeName(arr, name, excludeId = null) {
+		if (!nameExistsInArray(arr, name, excludeId)) return name;
+		const dot = name.lastIndexOf(".");
+		const base = dot > 0 ? name.slice(0, dot) : name;
+		const ext = dot > 0 ? name.slice(dot) : "";
+		let c = 1;
+		let newName = `${base} (${c})${ext}`;
+		while (nameExistsInArray(arr, newName, excludeId)) {
+			c++;
+			newName = `${base} (${c})${ext}`;
+		}
+		return newName;
 	}
 
 	function wsNameExists(name, excludeId = null) {
@@ -1718,22 +1727,28 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	window.addFile = async function () {
-		await autoSaveCurrentFile();
-		const t = getTarget();
-		let name = "untitled.md", c = 1;
-		while (nameExistsInArray(t.array, name)) name = `untitled-${c++}.md`;
-		const nf = { id: uid("file"), name, type: "file", content: "" };
-		t.array.push(nf);
-		if (t.node) t.node.isOpen = true;
-		if (!openTabs.includes(nf.id)) {
-			openTabs.push(nf.id);
+		if (isAddingFile) return;
+		isAddingFile = true;
+		try {
+			await autoSaveCurrentFile();
+			const t = getTarget();
+			let name = "untitled.md", c = 1;
+			while (nameExistsInArray(t.array, name)) name = `untitled-${c++}.md`;
+			const nf = { id: uid("file"), name, type: "file", content: "" };
+			t.array.push(nf);
+			if (t.node) t.node.isOpen = true;
+			if (!openTabs.includes(nf.id)) {
+				openTabs.push(nf.id);
+			}
+			selectedId = nf.id;
+			persistCurrent();
+			render();
+			setTimeout(() => beginInlineRename(nf.id), 40);
+			await loadFile();
+			syncWorkspace();
+		} finally {
+			isAddingFile = false;
 		}
-		selectedId = nf.id;
-		persistCurrent();
-		render();
-		setTimeout(() => beginInlineRename(nf.id), 40);
-		await loadFile();
-		syncWorkspace();
 	};
 
 	window.addFolder = async function () {
@@ -1746,7 +1761,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const nf = { id: uid("folder"), name, type: "folder", isOpen: true, children: [] };
 		t.array.push(nf);
 		if (t.node) t.node.isOpen = true;
-		selectedId = nf.id;
+		// Leave selectedId pointing to current active file to prevent stale un-savable editor state
 		persistCurrent();
 		render();
 		setTimeout(() => beginInlineRename(nf.id), 40);
@@ -1802,26 +1817,35 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (hasD(src.children, tgtId)) return;
 		}
 
+		const oldName = src.name;
 		const oldFullPath = getPath(srcId);
 		const oldPathParts = oldFullPath.slice(0, -1).map(x => x.name);
 
 		const op = findParent(files, srcId);
 		if (op) op.children = op.children.filter(n => n.id !== srcId);
 		else files = files.filter(n => n.id !== srcId);
-		if (!tgtId) {
-			files.push(src);
-		} else {
+
+		let arr = files;
+		let tp = null;
+		if (tgtId) {
 			const tgt = findNode(files, tgtId);
-			const arr = tgt.type === "folder" ? tgt.children : (findParent(files, tgtId)?.children || files);
-			const tp = tgt.type === "folder" ? tgt : findParent(files, tgtId);
-			arr.push(src);
-			if (tp) tp.isOpen = true;
+			if (tgt) {
+				arr = tgt.type === "folder" ? tgt.children : (findParent(files, tgtId)?.children || files);
+				tp = tgt.type === "folder" ? tgt : findParent(files, tgtId);
+			}
 		}
+
+		if (nameExistsInArray(arr, src.name, src.id)) {
+			src.name = uniqueNodeName(arr, src.name, src.id);
+		}
+
+		arr.push(src);
+		if (tp) tp.isOpen = true;
 
 		const newFullPath = getPath(srcId);
 		const newPathParts = newFullPath.slice(0, -1).map(x => x.name);
-		if (oldPathParts.join("/") !== newPathParts.join("/")) {
-			queueDiskDeletion(oldPathParts, src.name);
+		if (oldPathParts.join("/") !== newPathParts.join("/") || oldName !== src.name) {
+			queueDiskDeletion(oldPathParts, oldName);
 			const clearDiskContent = (node) => {
 				delete node._diskContent;
 				if (node.children) node.children.forEach(clearDiskContent);
@@ -1862,7 +1886,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const dot = n.name.lastIndexOf(".");
 		input.setSelectionRange(0, dot > 0 ? dot : n.name.length);
 
+		let isCancelled = false;
 		const commit = () => {
+			if (isCancelled) return;
 			inlineRenameId = null;
 			const newName = input.value.trim();
 			if (!newName || newName === n.name) { render(); return; }
@@ -1883,7 +1909,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		input.addEventListener("blur", commit);
 		input.addEventListener("keydown", (e) => {
 			if (e.key === "Enter") { e.preventDefault(); input.blur(); }
-			if (e.key === "Escape") { inlineRenameId = null; render(); }
+			if (e.key === "Escape") { isCancelled = true; inlineRenameId = null; render(); }
 		});
 	}
 
@@ -1984,6 +2010,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	window.toggleWordWrap = function () {
 		isWordWrap = !isWordWrap;
 		applyWordWrapUI();
+		if (!isWordWrap) updateLineNumbers();
 		if (activeWsId) saveWsConfig(activeWsId);
 	};
 
@@ -2080,20 +2107,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 			return;
 		}
-		if (selectedId) {
-			await autoSaveCurrentFile();
+		if (isOpenTabInProgress) return;
+		isOpenTabInProgress = true;
+		try {
+			if (selectedId) {
+				await autoSaveCurrentFile();
+			}
+			if (!openTabs.includes(id)) {
+				openTabs.push(id);
+			}
+			selectedId = id;
+			document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
+			const activeEl = fileTreeEl?.querySelector(`[data-id="${id}"]`);
+			if (activeEl) activeEl.classList.add("active");
+			persistCurrent();
+			renderTabs();
+			await loadFile();
+			updateBreadcrumbs();
+		} finally {
+			isOpenTabInProgress = false;
 		}
-		if (!openTabs.includes(id)) {
-			openTabs.push(id);
-		}
-		selectedId = id;
-		document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
-		const activeEl = fileTreeEl?.querySelector(`[data-id="${id}"]`);
-		if (activeEl) activeEl.classList.add("active");
-		persistCurrent();
-		renderTabs();
-		await loadFile();
-		updateBreadcrumbs();
 	};
 
 	window.closeTab = async function (id, event) {
@@ -2245,9 +2278,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 					el.classList.add("active");
 					persistCurrent();
 					// In-place DOM toggle without full tree re-render
-					const iconEl = el.querySelector(".icon i");
-					if (iconEl && window.lucide) {
-						iconEl.setAttribute("data-lucide", node.isOpen ? "folder-open" : "folder");
+					const iconWrap = el.querySelector(".icon");
+					if (iconWrap && window.lucide) {
+						iconWrap.innerHTML = `<i data-lucide="${node.isOpen ? 'folder-open' : 'folder'}" size="15"></i>`;
 						lucide.createIcons();
 					}
 					const childSubTree = el.nextElementSibling;
@@ -2485,14 +2518,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 			onChange: async () => {
 				if (isInitEditor) return;
 				clearTimeout(editorSaveTimer);
-				const editingId = selectedId;
+				const editingId = editorLoadedFileId || selectedId;
 				editorSaveTimer = setTimeout(async () => {
-					if (!editingId || selectedId !== editingId) return;
+					if (!editingId || (selectedId !== editingId && editorLoadedFileId !== editingId)) return;
 					const f = findNode(files, editingId);
 					if (f?.type === "file" && editorInstance) {
 						try {
 							const d = await editorInstance.save();
-							if (selectedId !== editingId) return;
+							if (selectedId !== editingId && editorLoadedFileId !== editingId) return;
 							f.content = blocksToText(d);
 							if (editorTextarea) editorTextarea.value = f.content;
 							persistCurrent();
@@ -2511,6 +2544,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (fb) { selectedId = fb.id; file = fb; }
 		}
 
+		editorLoadedFileId = null;
 		isInitEditor = true;
 
 		if (file?.type === "file") {
@@ -2541,12 +2575,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 				plainWrapper.classList.remove("hidden");
 				editorjsWrapper.classList.add("hidden");
 			}
+			editorLoadedFileId = file.id;
 		} else {
 			const hasF = !!findFirstFile(files);
 			editorTextarea.value = "";
 			editorTextarea.disabled = hasF;
 			editorTextarea.placeholder = hasF ? "Select a file to edit" : "Create a file to start writing…";
 			if (editorMode === "block") await initOrUpdateEditorJs("");
+			editorLoadedFileId = null;
 		}
 
 		isInitEditor = false;
@@ -2729,7 +2765,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	editorTextarea.addEventListener("input", async () => {
-		const f = findNode(files, selectedId);
+		const targetId = (findNode(files, selectedId)?.type === "file") ? selectedId : editorLoadedFileId;
+		const f = findNode(files, targetId);
 		if (f?.type === "file") {
 			f.content = editorTextarea.value;
 			persistCurrent();
@@ -2839,8 +2876,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// BEFOREUNLOAD FLUSH
 	// ============================================================
 	window.addEventListener("beforeunload", () => {
-		if (selectedId && editorTextarea) {
-			const f = findNode(files, selectedId);
+		const targetId = (findNode(files, selectedId)?.type === "file") ? selectedId : editorLoadedFileId;
+		if (targetId && editorTextarea) {
+			const f = findNode(files, targetId);
 			if (f?.type === "file") {
 				if (editorMode === "plain") {
 					f.content = editorTextarea.value;

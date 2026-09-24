@@ -10,14 +10,14 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Data Loss & State Corruption** | 6 | 4 | 2 | 0 | 0 |
 | **File System API & Sync Engine** | 5 | 1 | 4 | 0 | 0 |
-| **Editor, Tabs & Line Numbers** | 8 | 0 | 5 | 3 | 0 |
+| **Editor, Tabs & Line Numbers** | 9 | 0 | 6 | 3 | 0 |
 | **Markdown & Editor.js Bridge** | 5 | 1 | 1 | 3 | 0 |
 | **ZIP Import / Export System** | 5 | 0 | 2 | 3 | 0 |
 | **Search, Navigation & Explorer** | 3 | 0 | 0 | 3 | 0 |
 | **Styling, Dead Code & CSS Defects** | 5 | 0 | 1 | 2 | 2 |
 | **Accessibility, Responsiveness & Shortcuts** | 5 | 0 | 1 | 2 | 2 |
 | **Architecture, Offline & Security** | 4 | 1 | 1 | 1 | 1 |
-| **Total** | **46** | **7** | **17** | **17** | **5** |
+| **Total** | **47** | **7** | **18** | **17** | **5** |
 
 ---
 
@@ -177,7 +177,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 
 ## 3. Editor, Tabs & Line Numbers (High / Medium)
 
-- [ ] **EDIT-01: Broken In-Place Folder Icon Toggle Due to Lucide SVG Replacement**
+- [x] **EDIT-01: Broken In-Place Folder Icon Toggle Due to Lucide SVG Replacement** (FIXED)
   - **Severity:** High
   - **Location:** [`js/script.js#L1543-L1547`](file:///home/raja/Workspace/keepLocal/js/script.js#L1543-L1547)
   - **Problem Description:** When `render()` executes, `lucide.createIcons()` transforms all `<i data-lucide="..."></i>` tags into `<svg class="lucide ...">` elements. In the tree item click handler:
@@ -202,7 +202,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
     }
     ```
 
-- [ ] **EDIT-02: Line Numbers De-synchronize and Misalign When Word Wrap Is Enabled**
+- [x] **EDIT-02: Line Numbers De-synchronize and Misalign When Word Wrap Is Enabled** (FIXED)
   - **Severity:** High
   - **Location:** [`js/script.js#L2005-L2011`](file:///home/raja/Workspace/keepLocal/js/script.js#L2005-L2011) & [`css/styles.css#L978-L987`](file:///home/raja/Workspace/keepLocal/css/styles.css#L978-L987)
   - **Problem Description:** In `updateLineNumbers()`, line numbers are rendered by counting newlines (`\n`) and joining integers. When Word Wrap (`Alt+Z`) is enabled, `#editor` and `#codeHighlightPre` wrap long lines onto multiple visual lines. However, `.line-numbers` does not wrap. Consequently, line numbers become severely displaced, with line 2 pointing to the wrapped tail of line 1.
@@ -211,7 +211,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
     1. Automatically hide `.line-numbers` while word wrap is active (`.word-wrap-active .line-numbers { display: none; }`).
     2. Dynamically measure each line element's height and match it in `.line-numbers`.
 
-- [ ] **EDIT-03: Syntax Highlighting Layer and Textarea Drift Apart in Word Wrap Mode**
+- [x] **EDIT-03: Syntax Highlighting Layer and Textarea Drift Apart in Word Wrap Mode** (FIXED)
   - **Severity:** High
   - **Location:** [`css/styles.css#L921-L976`](file:///home/raja/Workspace/keepLocal/css/styles.css#L921-L976) & [`css/styles.css#L985`](file:///home/raja/Workspace/keepLocal/css/styles.css#L985)
   - **Problem Description:** `#editor` has `overflow: auto;`, meaning a vertical scrollbar consumes 8–15px of horizontal width when content overflows. `#codeHighlightPre` has `overflow: hidden;` and no scrollbar. In Word Wrap mode, the wrapping width in `#editor` is narrower than in `#codeHighlightPre`. Long lines wrap at different character boundaries in the two layers, creating a blurred "double vision" effect where the highlighted tokens detach from the cursor and selection. Furthermore, `word-break: break-all !important;` unnaturally splits regular English words across lines.
@@ -220,7 +220,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
     1. Ensure both layers share identical padding, scrollbar gutter (`scrollbar-gutter: stable;`), and box sizing.
     2. Change `word-break: break-all !important;` to `overflow-wrap: break-word; word-break: normal;`.
 
-- [ ] **EDIT-04: EditorJS Heading Font Sizes Overwritten to Uniform 1.6x on Font Size Change**
+- [x] **EDIT-04: EditorJS Heading Font Sizes Overwritten to Uniform 1.6x on Font Size Change** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L720-L728`](file:///home/raja/Workspace/keepLocal/js/script.js#L720-L728) (`applyConfig`)
   - **Problem Description:** When `changeFontSize()` is called, `applyConfig()` iterates through all `.ce-header` elements and sets:
@@ -235,21 +235,21 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Broken typographic hierarchy in Block Mode.
   - **How to Fix:** Delete lines 720–728 in `js/script.js`. CSS rules in `css/styles.css#L1324-L1350` already use `calc(var(--editor-font-size) * ...)` to scale headers accurately.
 
-- [ ] **EDIT-05: Creating Folder Leaves Editor in Stale State with `selectedId` Pointing to Folder**
+- [x] **EDIT-05: Creating Folder Leaves Editor in Stale State with `selectedId` Pointing to Folder** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1091-L1103`](file:///home/raja/Workspace/keepLocal/js/script.js#L1091-L1103) (`addFolder`)
   - **Problem Description:** `addFolder()` sets `selectedId = nf.id;` (the new folder's ID) but does not call `loadFile()`. The editor continues displaying whatever file was previously open. If the user edits text, the raw input event handler checks `if (f?.type === "file")`, which fails because `selectedId` is a folder. Edits are silently discarded.
   - **Impact:** Discarded user edits and UI inconsistency.
   - **How to Fix:** Either call `loadFile()` after creating a folder (displaying an empty/folder placeholder state and disabling the textarea), or leave `selectedId` pointing to the active file.
 
-- [ ] **EDIT-06: Deleting Folder Leaves Deleted Child Files Open in Tabs and Editor**
+- [x] **EDIT-06: Deleting Folder Leaves Deleted Child Files Open in Tabs and Editor** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1110-L1121`](file:///home/raja/Workspace/keepLocal/js/script.js#L1110-L1121) (`deleteNode`)
   - **Problem Description:** `deleteNode(id)` only checks `if (selectedId === id)`. If a user deletes a folder while one of its nested child files is active, `selectedId` remains set to that child file. The editor continues to edit a deleted file that no longer exists in `files`, and edits cannot be saved.
   - **Impact:** Ghost tabs and un-savable file editing state.
   - **How to Fix:** In `deleteNode`, collect all descendant IDs of the deleted node. Filter `openTabs = openTabs.filter(tid => !deletedIds.has(tid))`. If `deletedIds.has(selectedId)`, reset `selectedId` and call `loadFile()`.
 
-- [ ] **EDIT-07: Inline Rename Escape Key Cancels But Blur Immediately Commits**
+- [x] **EDIT-07: Inline Rename Escape Key Cancels But Blur Immediately Commits** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1176-L1195`](file:///home/raja/Workspace/keepLocal/js/script.js#L1176-L1195) (`beginInlineRename`)
   - **Problem Description:** In `beginInlineRename()`, when the user presses `Escape`, line 1193 runs `inlineRenameId = null; render();`. Calling `render()` removes the `<input>` element from the DOM, which triggers the browser's `blur` event. The `blur` handler calls `commit()`, which reads the input value and commits the rename anyway!
@@ -262,12 +262,22 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 
     In `commit()`, check `if (isCancelled) return;`.
 
-- [ ] **EDIT-08: Drag and Drop Allows Duplicate Filenames in the Same Folder**
+- [x] **EDIT-08: Drag and Drop Allows Duplicate Filenames in the Same Folder** (FIXED)
   - **Severity:** Medium
   - **Location:** [`js/script.js#L1123-L1145`](file:///home/raja/Workspace/keepLocal/js/script.js#L1123-L1145) (`moveNode`)
   - **Problem Description:** When moving an item via drag-and-drop into a folder (or root), `moveNode` performs no name collision check. If `folderA` already contains `notes.md` and the user drops another `notes.md` into it, `folderA.children` now contains two files with the exact same name.
   - **Impact:** Confusing UI, broken tab selection, and file overwrite bugs during disk sync and ZIP exports.
   - **How to Fix:** Before appending `src` to `arr`, check `if (nameExistsInArray(arr, src.name, src.id))`. If a collision occurs, generate a unique name using `uniqueName(arr, src.name)` or show a duplicate warning modal.
+
+- [x] **EDIT-09: Active Note Content Replaced by Other Note in Tab List When Pressing New File (+)** (FIXED)
+  - **Severity:** High
+  - **Location:** [`js/script.js#L874-L895`](file:///home/raja/Workspace/keepLocal/js/script.js#L874-L895) (`autoSaveCurrentFile`), [`js/script.js#L1726-L1750`](file:///home/raja/Workspace/keepLocal/js/script.js#L1726-L1750) (`addFile`), [`js/script.js#L2090-L2125`](file:///home/raja/Workspace/keepLocal/js/script.js#L2090-L2125) (`openTab`), [`js/script.js#L2510-L2575`](file:///home/raja/Workspace/keepLocal/js/script.js#L2510-L2575) (`loadFile`)
+  - **Problem Description:** When pressing the New File (`+`) button multiple times (e.g. on the 3rd press) or switching tabs rapidly, asynchronous EditorJS rendering and auto-save calls race against each other. `selectedId` was switched to the new file before `loadFile()` finished asynchronously rendering in Editor.js (`await editorInstance.render()`). A subsequent `autoSaveCurrentFile()` call targeted `selectedId` (the newly created/opened file) while `editorInstance` still contained blocks from the previously active note. Consequently, the previous note's content was saved into the newly active note, causing active notes to have their content replaced by another note from the tab list.
+  - **Impact:** Content clobbering and silent data loss across open tabs during repeated file creation or rapid tab switching.
+  - **How to Fix:**
+    1. Introduce an `editorLoadedFileId` variable to explicitly track which file is currently rendered in `editorInstance`. In `autoSaveCurrentFile()`, write to `targetId || editorLoadedFileId || selectedId`, ensuring Editor.js blocks are saved only to the file they originated from.
+    2. Guard `autoSaveCurrentFile()` so that it immediately returns if `isInitEditor` is active, preventing incomplete/transition states from overwriting notes.
+    3. Add re-entrancy locks (`isAddingFile` and `isOpenTabInProgress`) to serialize `addFile()` and `openTab()` execution and prevent concurrent asynchronous render races.
 
 ---
 
