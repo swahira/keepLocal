@@ -492,14 +492,14 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 
 ## 9. Architecture, Offline & Security Concerns (Medium / Low)
 
-- [ ] **ARCH-01: Zero Offline Support in a Self-Described "Local-First" App**
+- [x] **ARCH-01: Zero Offline Support in a Self-Described "Local-First" App** (FIXED)
   - **Severity:** High
   - **Location:** [`index.html#L14-L32`](file:///home/raja/Workspace/keepLocal/index.html#L14-L32)
   - **Problem Description:** KeepLocal is marketed as a "private, local-first note editor", yet it loads 11 external scripts from CDNs (`unpkg.com`, `cdnjs.cloudflare.com`, `cdn.jsdelivr.net`) and Google Fonts. If the user has no internet connection, none of these scripts load and the application fails to start.
   - **Impact:** Contradicts the "local-first" privacy model; fails completely when offline.
   - **How to Fix:** Bundle libraries locally in a `vendor/` or `lib/` directory or register a Service Worker that caches CDN scripts for offline use.
 
-- [ ] **ARCH-02: Unpinned `@latest` CDN Dependencies Risk Breaking Changes**
+- [x] **ARCH-02: Unpinned `@latest` CDN Dependencies Risk Breaking Changes** (FIXED)
   - **Severity:** Medium
   - **Location:** [`index.html#L17-L26`](file:///home/raja/Workspace/keepLocal/index.html#L17-L26)
   - **Problem Description:** Scripts use unversioned `@latest` tags:
@@ -512,14 +512,14 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** High vulnerability to unexpected production breakage.
   - **How to Fix:** Pin all CDN URLs to specific, tested semver tags (e.g. `@editorjs/editorjs@2.30.7`).
 
-- [ ] **ARCH-03: Duplicate Scroll Event Listeners on `editorTextarea`**
+- [x] **ARCH-03: Duplicate Scroll Event Listeners on `editorTextarea`** (FIXED)
   - **Severity:** Low
   - **Location:** [`js/script.js#L1993-L2000`](file:///home/raja/Workspace/keepLocal/js/script.js#L1993-L2000) & [`js/script.js#L2036`](file:///home/raja/Workspace/keepLocal/js/script.js#L2036)
   - **Problem Description:** `lineNumbersEl.scrollTop = editorTextarea.scrollTop;` is registered twice in two separate scroll event listeners on `editorTextarea`.
   - **Impact:** Redundant event processing on high-frequency scroll events.
   - **How to Fix:** Remove line 2036 and consolidate in line 1993.
 
-- [ ] **ARCH-04: Outdated Documentation & Name Mismatch in `README.md`**
+- [x] **ARCH-04: Outdated Documentation & Name Mismatch in `README.md`** (FIXED)
   - **Severity:** Low
   - **Location:** [`README.md#L1`](file:///home/raja/Workspace/keepLocal/README.md#L1), [`README.md#L68-L74`](file:///home/raja/Workspace/keepLocal/README.md#L68-L74)
   - **Problem Description:** The README refers to the application as `localKeep` rather than `KeepLocal`, and its "Known Limitations" section claims "The Tab key does not insert a tab character in the editor", which is no longer accurate.

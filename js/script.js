@@ -3468,3 +3468,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 		showWelcome();
 	}
 });
+
+// ============================================================
+// SERVICE WORKER REGISTRATION (ARCH-01)
+// ============================================================
+if ("serviceWorker" in navigator && (window.location.protocol === "http:" || window.location.protocol === "https:")) {
+	window.addEventListener("load", () => {
+		navigator.serviceWorker.register("./sw.js").catch((err) => {
+			console.warn("[KeepLocal] Service Worker registration failed:", err);
+		});
+	});
+}
+
