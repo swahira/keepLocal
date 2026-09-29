@@ -1824,6 +1824,280 @@ button {
 }
 
 /* ============================================================
+   HELP / ONBOARDING MODAL
+   ============================================================ */
+.help-modal-container {
+	width: 680px;
+	max-width: 92vw;
+	max-height: 88vh;
+	display: flex;
+	flex-direction: column;
+	padding: 0;
+	overflow: hidden;
+}
+
+.help-modal-header {
+	padding: 18px 24px 16px;
+	border-bottom: 1px solid var(--border-color);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	flex-shrink: 0;
+}
+
+.help-brand-wrap {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.help-logo-img {
+	width: 34px;
+	height: 34px;
+	object-fit: contain;
+	flex-shrink: 0;
+}
+
+.help-modal-title {
+	font-size: 17px;
+	font-weight: 700;
+	color: var(--text-primary);
+	margin: 0;
+	line-height: 1.25;
+}
+
+.help-modal-title span {
+	color: var(--accent-color);
+}
+
+.help-modal-subtitle {
+	font-size: 12.5px;
+	color: var(--text-secondary);
+	margin: 3px 0 0;
+	line-height: 1.4;
+}
+
+.help-close-btn {
+	width: 28px;
+	height: 28px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--radius);
+	border: 1px solid var(--border-color);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	flex-shrink: 0;
+	transition: all var(--transition);
+}
+
+.help-close-btn:hover {
+	color: var(--text-primary);
+	background: var(--bg-hover);
+	border-color: var(--accent-color);
+}
+
+.help-modal-body {
+	padding: 20px 24px;
+	overflow-y: auto;
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.help-section-title {
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--text-muted);
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+}
+
+.help-features-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 10px;
+}
+
+.help-feature-card {
+	background: var(--bg-secondary);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius);
+	padding: 12px 14px;
+	display: flex;
+	gap: 12px;
+	align-items: flex-start;
+	transition: border-color var(--transition), background var(--transition);
+}
+
+.help-feature-card:hover {
+	border-color: var(--accent-border);
+	background: var(--bg-hover);
+}
+
+.help-feature-icon {
+	width: 32px;
+	height: 32px;
+	border-radius: var(--radius-sm);
+	background: var(--accent-dim);
+	color: var(--accent-color);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+}
+
+.help-feature-content h4 {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-primary);
+	margin: 0 0 3px;
+}
+
+.help-feature-content p {
+	font-size: 12px;
+	color: var(--text-secondary);
+	margin: 0;
+	line-height: 1.45;
+}
+
+.help-feature-content code {
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-subtle);
+	padding: 1px 4px;
+	border-radius: 3px;
+	font-size: 11px;
+	font-family: 'JetBrains Mono', monospace;
+}
+
+.help-shortcuts-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 8px;
+}
+
+.help-shortcut-row {
+	background: var(--bg-secondary);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-sm);
+	padding: 8px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	transition: border-color var(--transition);
+}
+
+.help-shortcut-row:hover {
+	border-color: var(--border-color);
+}
+
+.help-shortcut-keys {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 11px;
+	color: var(--text-muted);
+	font-weight: 500;
+	flex-wrap: wrap;
+}
+
+.help-shortcut-keys kbd,
+.help-footer-hint kbd {
+	font-family: 'JetBrains Mono', monospace;
+	font-size: 11px;
+	font-weight: 600;
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-color);
+	border-bottom-width: 2px;
+	border-radius: 4px;
+	padding: 1px 6px;
+	color: var(--text-primary);
+	line-height: 1.4;
+}
+
+.help-shortcut-desc {
+	font-size: 11.5px;
+	color: var(--text-secondary);
+	line-height: 1.35;
+}
+
+.help-modal-footer {
+	padding: 14px 24px;
+	border-top: 1px solid var(--border-color);
+	background: var(--bg-secondary);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-shrink: 0;
+}
+
+.help-footer-hint {
+	font-size: 12px;
+	color: var(--text-muted);
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.help-footer-hint i {
+	color: var(--accent-color);
+	flex-shrink: 0;
+}
+
+.help-got-it-btn {
+	padding: 7px 18px;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+/* Welcome tip clickable help link */
+.welcome-tip-help {
+	cursor: pointer;
+	border-radius: var(--radius-sm);
+	padding: 2px 4px;
+	margin-left: -4px;
+	transition: background var(--transition), color var(--transition);
+}
+
+.welcome-tip-help:hover {
+	background: var(--accent-dim);
+	color: var(--accent-color);
+}
+
+.welcome-tip-help:hover i {
+	color: var(--accent-color);
+}
+
+/* Status bar help button */
+.status-help-btn {
+	background: transparent;
+	border: none;
+	color: var(--text-muted);
+	font-size: 11px;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	cursor: pointer;
+	padding: 1px 6px;
+	border-radius: var(--radius-sm);
+	font-family: inherit;
+	transition: all var(--transition);
+}
+
+.status-help-btn:hover {
+	color: var(--accent-color);
+	background: var(--accent-dim);
+}
+
+/* ============================================================
    CONTEXT MENU
    ============================================================ */
 .context-menu {
@@ -2487,5 +2761,44 @@ button {
 
 	.editorjs-wrapper {
 		padding: 20px 12px;
+	}
+
+	.help-modal-container {
+		width: calc(100vw - 20px) !important;
+		max-height: 94vh;
+		padding: 0 !important;
+	}
+
+	.help-modal-header {
+		padding: 14px 16px 12px;
+	}
+
+	.help-modal-body {
+		padding: 14px 16px;
+		gap: 14px;
+	}
+
+	.help-features-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.help-shortcuts-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.help-modal-footer {
+		padding: 12px 16px;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 10px;
+	}
+
+	.help-footer-hint {
+		justify-content: center;
+	}
+
+	.help-got-it-btn {
+		width: 100%;
+		text-align: center;
 	}
 }

@@ -3,7 +3,7 @@
    Offline caching for local-first note taking (ARCH-01)
    ============================================================ */
 
-const CACHE_NAME = 'keeplocal-v1';
+const CACHE_NAME = 'keeplocal-v2';
 
 const STATIC_ASSETS = [
 	'./',

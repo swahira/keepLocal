@@ -1452,6 +1452,76 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		}
 	});
+
+	// ============================================================
+	// HELP / ONBOARDING MODAL
+	// ============================================================
+	const helpModalOverlay = document.getElementById("helpModalOverlay");
+
+	function openHelpModal() {
+		if (!helpModalOverlay) return;
+		helpModalOverlay.classList.add("active");
+		if (window.lucide) lucide.createIcons();
+		const focusBtn = helpModalOverlay.querySelector(".help-got-it-btn") || helpModalOverlay.querySelector(".help-close-btn");
+		setTimeout(() => { if (focusBtn) focusBtn.focus(); }, 30);
+	}
+
+	function hideHelpModal() {
+		if (!helpModalOverlay) return;
+		helpModalOverlay.classList.remove("active");
+	}
+
+	function toggleHelpModal() {
+		if (helpModalOverlay?.classList.contains("active")) {
+			hideHelpModal();
+		} else {
+			openHelpModal();
+		}
+	}
+
+	window.openHelpModal = openHelpModal;
+	window.hideHelpModal = hideHelpModal;
+	window.toggleHelpModal = toggleHelpModal;
+
+	helpModalOverlay?.addEventListener("click", (e) => {
+		if (e.target === helpModalOverlay) hideHelpModal();
+	});
+
+	document.addEventListener("keydown", (e) => {
+		if (!helpModalOverlay || !helpModalOverlay.classList.contains("active")) return;
+		if (e.key === "Escape" || e.key === "?" || e.key === "F1" || (e.altKey && (e.key.toLowerCase() === "h" || e.code === "KeyH"))) {
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			hideHelpModal();
+			return;
+		}
+		if (e.key === "Tab") {
+			const container = helpModalOverlay.querySelector(".help-modal-container");
+			if (!container) return;
+			const focusable = Array.from(
+				container.querySelectorAll(
+					'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+				)
+			).filter(el => el.offsetParent !== null && !el.closest(".hidden"));
+
+			if (focusable.length === 0) return;
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+
+			if (e.shiftKey) {
+				if (document.activeElement === first || !container.contains(document.activeElement)) {
+					e.preventDefault();
+					last.focus();
+				}
+			} else {
+				if (document.activeElement === last || !container.contains(document.activeElement)) {
+					e.preventDefault();
+					first.focus();
+				}
+			}
+		}
+	});
+
 	// ============================================================
 	// FILESYSTEM SYNC
 	// ============================================================
@@ -3474,6 +3544,46 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 	});
 
+	// Helper to check if element is an input, textarea, or contenteditable editor
+	function isEditableTarget(el) {
+		if (!el) return false;
+		const tag = el.tagName;
+		return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable || (el.closest && !!el.closest('[contenteditable="true"]'));
+	}
+
+	// Help shortcuts: '?' toggles help when not typing in editor, F1 or Alt+H toggles anytime
+	document.addEventListener("keydown", (e) => {
+		// F1 or Alt+H (or Option+H) toggles help from anywhere
+		if (e.key === "F1" || (e.altKey && (e.key.toLowerCase() === "h" || e.code === "KeyH"))) {
+			e.preventDefault();
+			toggleHelpModal();
+			return;
+		}
+
+		// Ctrl/Cmd + Shift + ? (or Ctrl/Cmd + ?) toggles help
+		if ((e.ctrlKey || e.metaKey) && (e.key === "?" || (e.shiftKey && (e.key === "/" || e.code === "Slash")))) {
+			e.preventDefault();
+			toggleHelpModal();
+			return;
+		}
+
+		// '?' shortcut toggles help when not typing in an editable field
+		if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+			if (helpModalOverlay?.classList.contains("active")) {
+				e.preventDefault();
+				hideHelpModal();
+				return;
+			}
+			// Do not open if another prompt modal is open
+			if (modalOverlay?.classList.contains("active")) return;
+
+			if (!isEditableTarget(document.activeElement) && !isEditableTarget(e.target)) {
+				e.preventDefault();
+				toggleHelpModal();
+			}
+		}
+	});
+
 	// ============================================================
 	// SIDEBAR RESIZE
 	// ============================================================
@@ -3621,6 +3731,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 		await openWorkspace(sorted[0].id);
 	} else {
 		showWelcome();
+	}
+
+	// First time visit: show product onboarding & help modal
+	const hasSeenHelp = localStorage.getItem("keeplocal_help_seen");
+	if (!hasSeenHelp) {
+		localStorage.setItem("keeplocal_help_seen", "true");
+		setTimeout(() => {
+			openHelpModal();
+		}, 200);
 	}
 });
 

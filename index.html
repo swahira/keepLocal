@@ -103,6 +103,10 @@
                     <i data-lucide="zap" size="13"></i>
                     <span><b>Ctrl/Cmd+Shift+L</b> toggles theme</span>
                 </div>
+                <div class="welcome-tip welcome-tip-help" onclick="toggleHelpModal()" title="Open Product Guide & Shortcuts (?)">
+                    <i data-lucide="help-circle" size="13"></i>
+                    <span>Press <b>?</b> or <b>Alt+H</b> for product guide</span>
+                </div>
             </div>
 
             <div id="welcomeFsBanner" class="welcome-fs-banner hidden">
@@ -122,6 +126,10 @@
                 </button>
                 <input id="wsCardSearchInput" class="ws-card-search-input hidden" placeholder="Search workspaces..."
                     oninput="filterWorkspaceCards()" />
+                <button class="ws-card-search-btn" id="welcomeHelpBtn" onclick="toggleHelpModal()"
+                    title="Product Guide & Shortcuts (?)">
+                    <i data-lucide="help-circle" size="15"></i>
+                </button>
             </div>
 
             <div id="workspacesList" class="workspaces-list">
@@ -289,6 +297,9 @@
                     <button id="themeToggle" class="control-btn" onclick="toggleTheme()" title="Toggle Theme">
                         <i data-lucide="sun" size="15"></i>
                     </button>
+                    <button id="helpToggle" class="control-btn" onclick="toggleHelpModal()" title="Help & Shortcuts (? / Alt+H)">
+                        <i data-lucide="help-circle" size="15"></i>
+                    </button>
                 </div>
             </div>
 
@@ -314,6 +325,9 @@
                 <span id="editorStatus" class="status-left">Block Mode</span>
                 <span id="wsStatusBadge" class="ws-status-badge">No folder</span>
                 <span id="cursorPos" class="status-right">Ln 1, Col 1</span>
+                <button id="statusHelpBtn" class="status-help-btn" onclick="toggleHelpModal()" title="Help & Shortcuts (? / Alt+H)">
+                    <i data-lucide="help-circle" size="11"></i> Help (?)
+                </button>
             </div>
         </div>
     </div>
@@ -334,6 +348,127 @@
                     <button id="modalAlertOkBtn" class="modal-btn primary">OK</button>
                 </div>
                 <div id="modalChoiceButtons" class="modal-choices hidden"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Help / Product Guide Modal -->
+    <div id="helpModalOverlay" class="modal-overlay">
+        <div class="modal-container help-modal-container" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
+            <div class="help-modal-header">
+                <div class="help-brand-wrap">
+                    <img src="assets/keeplocal.png" alt="KeepLocal" class="help-logo-img">
+                    <div>
+                        <h2 id="helpModalTitle" class="help-modal-title">Welcome to Keep<span>Local</span></h2>
+                        <p class="help-modal-subtitle">Private, local-first notes editor & markdown workspace</p>
+                    </div>
+                </div>
+                <button class="help-close-btn" onclick="hideHelpModal()" title="Close (Esc or ?)" aria-label="Close Help">
+                    <i data-lucide="x" size="16"></i>
+                </button>
+            </div>
+
+            <div class="help-modal-body">
+                <!-- Key Features -->
+                <div class="help-section-title">
+                    <i data-lucide="sparkles" size="14"></i>
+                    <span>Key Features</span>
+                </div>
+                <div class="help-features-grid">
+                    <div class="help-feature-card">
+                        <div class="help-feature-icon">
+                            <i data-lucide="shield-check" size="18"></i>
+                        </div>
+                        <div class="help-feature-content">
+                            <h4>100% Private & Local</h4>
+                            <p>No login, no cloud databases, and zero tracking. Your notes and files stay strictly on your device.</p>
+                        </div>
+                    </div>
+
+                    <div class="help-feature-card">
+                        <div class="help-feature-icon">
+                            <i data-lucide="folder-sync" size="18"></i>
+                        </div>
+                        <div class="help-feature-content">
+                            <h4>Bi-Directional Folder Sync</h4>
+                            <p>Connect any directory on your computer via File System Access API with automated real-time background sync.</p>
+                        </div>
+                    </div>
+
+                    <div class="help-feature-card">
+                        <div class="help-feature-icon">
+                            <i data-lucide="edit-3" size="18"></i>
+                        </div>
+                        <div class="help-feature-content">
+                            <h4>Dual Editor Modes</h4>
+                            <p>Rich <b>Block Mode</b> with slash commands (<code>/</code>), task lists, code blocks, tables, and <b>Raw Markdown</b> mode with syntax highlighting.</p>
+                        </div>
+                    </div>
+
+                    <div class="help-feature-card">
+                        <div class="help-feature-icon">
+                            <i data-lucide="layout-grid" size="18"></i>
+                        </div>
+                        <div class="help-feature-content">
+                            <h4>Workspaces & Multi-Tabs</h4>
+                            <p>Create multiple workspaces, organize folders in the explorer, work across tabs, and backup or restore via ZIP.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Shortcuts Cheat Sheet -->
+                <div class="help-section-title">
+                    <i data-lucide="keyboard" size="14"></i>
+                    <span>Keyboard Shortcuts</span>
+                </div>
+                <div class="help-shortcuts-grid">
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>Ctrl</kbd> / <kbd>Cmd</kbd> + <kbd>S</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Save & sync note to connected folder</div>
+                    </div>
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>Alt</kbd> + <kbd>N</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Create new note in active folder</div>
+                    </div>
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>Alt</kbd> + <kbd>W</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Close current tab / note</div>
+                    </div>
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>/</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Open slash command menu in Block Editor</div>
+                    </div>
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>L</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Toggle Light / Dark theme</div>
+                    </div>
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>?</kbd> or <kbd>F1</kbd> or <kbd>Alt</kbd> + <kbd>H</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Toggle this Help modal anytime</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="help-modal-footer">
+                <div class="help-footer-hint">
+                    <i data-lucide="help-circle" size="13"></i>
+                    <span>Press <kbd>?</kbd> or <kbd>Alt+H</kbd> anytime to toggle this guide</span>
+                </div>
+                <button class="modal-btn primary help-got-it-btn" onclick="hideHelpModal()">
+                    Got it, let's start!
+                </button>
             </div>
         </div>
     </div>

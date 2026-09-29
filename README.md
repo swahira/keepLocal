@@ -70,6 +70,7 @@ Since KeepLocal is a client-side application, you can run it locally with any st
 | `Shift+Tab` | Unindent line or multi-line selection |
 | `Ctrl/Cmd + Wheel` | Zoom editor font size |
 | `/` (in Block Mode) | Open toolbox slash-command menu |
+| `?` / `F1` / `Alt+H` | Toggle product help & keyboard shortcuts guide |
 | `Esc` | Close active modals, search bars, and mobile drawer |
 
 ## Built With
