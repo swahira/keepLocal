@@ -19,12 +19,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 	let wsCardSearchQuery = "";
 	let importIdCounter = 0;
 	let workspaceHandle = null;  // FileSystemDirectoryHandle
+	let fsPermissionGranted = false; // true if workspaceHandle has granted readwrite permission
 	let editorMode = "block";
 	let editorInstance = null;
 	let isInitEditor = false;
+	let editorLoadedFileId = null;
+	let isAddingFile = false;
+	let isOpenTabInProgress = false;
 	let editorSaveTimer = null;
 	let draggedId = null;
 	let inlineRenameId = null;
+	let pendingDeletions = []; // [{ pathParts: string[], name: string }]
 
 	// ============================================================
 	// DOM REFS
@@ -36,8 +41,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const workspacesEmpty = document.getElementById("workspacesEmpty");
 	const wsCountBadge = document.getElementById("wsCountBadge");
 	const sidebarWsName = document.getElementById("sidebarWsName");
-	const workspacePathLabel = document.getElementById("workspacePathLabel");
-	const wsSyncBtn = document.getElementById("wsSyncBtn");
 	const wsStatusBadge = document.getElementById("wsStatusBadge");
 	const saveWorkspaceBtn = document.getElementById("saveWorkspaceBtn");
 	const browserSupportMsg = document.getElementById("browserSupportMessage");
@@ -47,14 +50,28 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const editorStatusSpan = document.getElementById("editorStatus");
 	const editorjsWrapper = document.getElementById("editorjs");
 	const plainWrapper = document.getElementById("plainEditorWrapper");
+	const editorEmptyState = document.getElementById("editorEmptyState");
 	const lineNumbersEl = document.getElementById("lineNumbers");
 	const editorTextarea = document.getElementById("editor");
+	const modeSwitchGroup = document.getElementById("modeSwitchGroup");
 	const modeBlockBtn = document.getElementById("modeBlockBtn");
 	const modePlainBtn = document.getElementById("modePlainBtn");
+
+	function isMarkdownFile(filename) {
+		if (!filename) return false;
+		const ext = filename.split(".").pop()?.toLowerCase();
+		return ext === "md" || ext === "markdown";
+	}
 
 	// ============================================================
 	// FEATURE DETECTION
 	// ============================================================
+	if (window.location.hostname === "0.0.0.0") {
+		const redirectUrl = `${window.location.protocol}//localhost:${window.location.port || 8000}${window.location.pathname}${window.location.search}${window.location.hash}`;
+		window.location.replace(redirectUrl);
+	}
+
+	const isSecure = window.isSecureContext;
 	const supportsFS = "showDirectoryPicker" in window;
 
 	// ============================================================
@@ -108,56 +125,239 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	// ============================================================
-	// WORKSPACE PERSISTENCE
+	// WORKSPACE PERSISTENCE & STORAGE QUOTA MONITORING
 	// ============================================================
+	let lastQuotaWarningTime = 0;
+	const QUOTA_WARNING_COOLDOWN_MS = 60000;
+
+	function isQuotaExceededError(err) {
+		return (
+			err instanceof DOMException &&
+			(err.code === 22 ||
+				err.code === 1014 ||
+				err.name === "QuotaExceededError" ||
+				err.name === "NS_ERROR_DOM_QUOTA_REACHED")
+		);
+	}
+
+	function handleStorageError(err, context = "") {
+		console.warn(`Storage error in ${context}:`, err);
+		if (isQuotaExceededError(err)) {
+			updateStorageQuotaUI(true /* isFull */);
+			notifyStorageQuotaExceeded();
+		}
+	}
+
+	function getLocalStorageUsageChars() {
+		let total = 0;
+		try {
+			for (let i = 0; i < localStorage.length; i++) {
+				const key = localStorage.key(i);
+				if (key) {
+					const val = localStorage.getItem(key);
+					total += key.length + (val ? val.length : 0);
+				}
+			}
+		} catch (_) { }
+		return total;
+	}
+
+	function checkStorageQuota() {
+		if (workspaceHandle) {
+			updateStorageQuotaUI(false, 0);
+			return;
+		}
+		const chars = getLocalStorageUsageChars();
+		const maxChars = 5242880; // ~5MB default browser quota limit
+		const pct = Math.min(100, Math.round((chars / maxChars) * 100));
+
+		if (pct >= 80) {
+			updateStorageQuotaUI(pct >= 98, pct);
+		} else {
+			updateStorageQuotaUI(false, pct);
+		}
+	}
+
+	function updateStorageQuotaUI(isFull, pct = 0) {
+		const banner = document.getElementById("storageQuotaBanner");
+		const text = document.getElementById("storageQuotaText");
+		if (!banner) return;
+
+		if (workspaceHandle) {
+			banner.classList.add("hidden");
+			return;
+		}
+
+		if (isFull) {
+			banner.className = "storage-quota-banner danger";
+			if (text) text.textContent = "Storage full! Connect folder";
+			banner.classList.remove("hidden");
+			if (window.lucide) lucide.createIcons();
+		} else if (pct >= 80) {
+			banner.className = "storage-quota-banner warning";
+			if (text) text.textContent = `Storage ~${pct}% full`;
+			banner.classList.remove("hidden");
+			if (window.lucide) lucide.createIcons();
+		} else {
+			banner.classList.add("hidden");
+		}
+	}
+
+	function notifyStorageQuotaExceeded() {
+		if (workspaceHandle) return; // files are safely on physical disk
+		const now = Date.now();
+		if (now - lastQuotaWarningTime < QUOTA_WARNING_COOLDOWN_MS) return;
+		lastQuotaWarningTime = now;
+
+		if (supportsFS) {
+			showChoiceModal({
+				title: "Browser Storage Limit Reached (~5MB)",
+				message: "Your browser's local storage quota has been reached. New changes cannot be saved locally. Connect a computer folder to save unlimited notes directly to your hard drive, or export your notes.",
+				choices: [
+					{
+						label: "Connect Folder (Recommended)",
+						description: "Save unlimited files directly to your computer's hard drive.",
+						action: "connect",
+						primary: true
+					},
+					{
+						label: "Export ZIP Backup",
+						description: "Download a ZIP archive containing all your workspace notes.",
+						action: "export"
+					},
+					{
+						label: "Dismiss",
+						description: "Continue editing (unsaved changes will not persist across browser reloads).",
+						action: "dismiss"
+					}
+				],
+				onSelect: (action) => {
+					if (action === "connect") {
+						saveWorkspace();
+					} else if (action === "export") {
+						exportAll();
+					}
+				}
+			});
+		} else {
+			showAlertModal(
+				"Browser Storage Full",
+				"Your browser's local storage limit (~5MB) has been reached. Please export your notes or delete unneeded files to free up space."
+			);
+		}
+	}
+
 	function saveWorkspaceMeta() {
-		localStorage.setItem("keeplocal_workspaces", JSON.stringify(workspaces));
+		try {
+			localStorage.setItem("keeplocal_workspaces", JSON.stringify(workspaces));
+		} catch (e) {
+			handleStorageError(e, "saveWorkspaceMeta");
+		}
 	}
 	function loadWorkspaceMeta() {
-		const raw = localStorage.getItem("keeplocal_workspaces");
-		workspaces = raw ? JSON.parse(raw) : [];
+		try {
+			const raw = localStorage.getItem("keeplocal_workspaces");
+			workspaces = raw ? JSON.parse(raw) : [];
+		} catch (e) {
+			console.warn("loadWorkspaceMeta:", e);
+			workspaces = [];
+		}
 	}
 
 	function saveWsFiles(wsId) {
-		localStorage.setItem(`keeplocal_files_${wsId}`, JSON.stringify(files));
+		try {
+			localStorage.setItem(`keeplocal_files_${wsId}`, JSON.stringify(files));
+			checkStorageQuota();
+		} catch (e) {
+			handleStorageError(e, "saveWsFiles");
+		}
 	}
 	function loadWsFiles(wsId) {
-		const raw = localStorage.getItem(`keeplocal_files_${wsId}`);
-		files = raw ? JSON.parse(raw) : [];
+		try {
+			const raw = localStorage.getItem(`keeplocal_files_${wsId}`);
+			files = raw ? JSON.parse(raw) : [];
+		} catch (e) {
+			console.warn("loadWsFiles:", e);
+			files = [];
+		}
 	}
 
 	function saveWsConfig(wsId) {
 		const sidebar = document.querySelector(".sidebar");
-		localStorage.setItem(`keeplocal_cfg_${wsId}`, JSON.stringify({
-			theme, fontSize, selectedId, editorMode, openTabs, isWordWrap,
-			sidebarWidth: sidebar ? sidebar.offsetWidth : undefined
-		}));
+		try {
+			localStorage.setItem(`keeplocal_cfg_${wsId}`, JSON.stringify({
+				theme, fontSize, selectedId, editorMode, openTabs, isWordWrap,
+				sidebarWidth: sidebar ? sidebar.offsetWidth : undefined
+			}));
+		} catch (e) {
+			handleStorageError(e, "saveWsConfig");
+		}
 	}
 	function loadWsConfig(wsId) {
-		const raw = localStorage.getItem(`keeplocal_cfg_${wsId}`);
-		if (raw) {
-			const c = JSON.parse(raw);
-			theme = c.theme || "dark";
-			fontSize = Number.isFinite(Number(c.fontSize))
-				? Number(c.fontSize)
-				: 13;
-			selectedId = c.selectedId || null;
-			editorMode = c.editorMode || "block";
-			openTabs = Array.isArray(c.openTabs) ? c.openTabs : [];
-			isWordWrap = !!c.isWordWrap;
-			if (c.sidebarWidth) {
-				document.documentElement.style.setProperty("--sidebar-width", c.sidebarWidth + "px");
+		try {
+			const raw = localStorage.getItem(`keeplocal_cfg_${wsId}`);
+			if (raw) {
+				const c = JSON.parse(raw);
+				theme = c.theme || "dark";
+				fontSize = Number.isFinite(Number(c.fontSize))
+					? Number(c.fontSize)
+					: 13;
+				selectedId = c.selectedId || null;
+				editorMode = c.editorMode || "block";
+				openTabs = Array.isArray(c.openTabs) ? c.openTabs : [];
+				isWordWrap = !!c.isWordWrap;
+				if (c.sidebarWidth) {
+					document.documentElement.style.setProperty("--sidebar-width", c.sidebarWidth + "px");
+				} else {
+					document.documentElement.style.removeProperty("--sidebar-width");
+				}
+				if (sidebar) sidebar.style.width = "";
+			} else {
+				openTabs = [];
+				isWordWrap = false;
+				document.documentElement.style.removeProperty("--sidebar-width");
+				if (sidebar) sidebar.style.width = "";
 			}
-		} else {
+		} catch (e) {
+			console.warn("loadWsConfig:", e);
 			openTabs = [];
 			isWordWrap = false;
+			document.documentElement.style.removeProperty("--sidebar-width");
+			if (sidebar) sidebar.style.width = "";
 		}
 	}
 
 	function deleteWsData(wsId) {
-		localStorage.removeItem(`keeplocal_files_${wsId}`);
-		localStorage.removeItem(`keeplocal_cfg_${wsId}`);
+		try {
+			localStorage.removeItem(`keeplocal_files_${wsId}`);
+			localStorage.removeItem(`keeplocal_cfg_${wsId}`);
+			localStorage.removeItem(`keeplocal_deletions_${wsId}`);
+		} catch (_) { }
 		idbDel(`handle_${wsId}`);
+		checkStorageQuota();
+	}
+
+	function queueDiskDeletion(pathParts, name) {
+		if (!name) return;
+		pendingDeletions.push({ pathParts: [...pathParts], name });
+		if (activeWsId) saveWsDeletions(activeWsId);
+	}
+
+	function saveWsDeletions(wsId) {
+		try {
+			localStorage.setItem(`keeplocal_deletions_${wsId}`, JSON.stringify(pendingDeletions));
+		} catch (e) {
+			handleStorageError(e, "saveWsDeletions");
+		}
+	}
+
+	function loadWsDeletions(wsId) {
+		try {
+			const raw = localStorage.getItem(`keeplocal_deletions_${wsId}`);
+			pendingDeletions = raw ? JSON.parse(raw) : [];
+		} catch {
+			pendingDeletions = [];
+		}
 	}
 
 	function updateWsMeta(wsId, patch) {
@@ -178,9 +378,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 		renderWorkspaceCards();
 		// FS banner
 		if (!supportsFS) {
-			document.getElementById("welcomeFsBanner").classList.remove("hidden");
-			document.getElementById("openFolderBtn").disabled = true;
-			document.getElementById("openFolderBtn").title = "Requires Chrome/Edge/Brave";
+			const fsBanner = document.getElementById("welcomeFsBanner");
+			if (fsBanner) {
+				fsBanner.classList.remove("hidden");
+				if (!isSecure) {
+					fsBanner.innerHTML = `<i data-lucide="alert-triangle" size="14"></i> Folder sync requires a Secure Context. Access via <a href="http://localhost:${location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
+					if (window.lucide) lucide.createIcons();
+				}
+			}
+			const openFolderBtn = document.getElementById("openFolderBtn");
+			if (openFolderBtn) {
+				openFolderBtn.disabled = true;
+				openFolderBtn.title = !isSecure ? "Requires Secure Context (localhost/HTTPS)" : "Requires Chrome/Edge/Brave";
+			}
 		}
 	}
 
@@ -216,7 +426,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			const relTime = timeAgo(ws.lastOpenedAt || ws.createdAt);
 			const folderBadge = ws.folderName
-				? `<span class="ws-card-badge folder-badge"><i data-lucide="folder" size="10"></i>${ws.folderName}</span>`
+				? `<span class="ws-card-badge folder-badge"><i data-lucide="folder" size="10"></i>${escHtml(ws.folderName)}</span>`
 				: `<span class="ws-card-badge local-badge"><i data-lucide="hard-drive" size="10"></i>Local</span>`;
 
 			card.innerHTML = `
@@ -383,46 +593,123 @@ document.addEventListener("DOMContentLoaded", async () => {
 		});
 	};
 
+	async function findWorkspaceByHandle(handle) {
+		if (!handle) return null;
+		for (const w of workspaces) {
+			if (w.folderName) {
+				try {
+					const storedHandle = await idbGet(`handle_${w.id}`);
+					if (storedHandle && typeof handle.isSameEntry === "function") {
+						if (await handle.isSameEntry(storedHandle)) {
+							return w;
+						}
+					}
+				} catch (e) {
+					console.warn("isSameEntry check failed:", e);
+				}
+			}
+		}
+		return null;
+	}
+
+	async function createNewWorkspaceFromHandle(handle) {
+		const ws = {
+			id: uid("ws"),
+			name: uniqueWsName(handle.name),
+			createdAt: Date.now(),
+			lastOpenedAt: Date.now(),
+			folderName: handle.name,
+			fileCount: 0
+		};
+		workspaces.push(ws);
+		saveWorkspaceMeta();
+
+		// Store handle
+		await idbSet(`handle_${ws.id}`, handle);
+		workspaceHandle = handle;
+		fsPermissionGranted = true;
+
+		// Read folder contents
+		const readFiles = await readDirectoryHandle(handle);
+		files = readFiles;
+		ws.fileCount = countAllFiles(files);
+		saveWorkspaceMeta();
+		saveWsFiles(ws.id);
+
+		await openWorkspace(ws.id, true /* skip file read, already done */);
+	}
+
 	window.openFolderWorkspace = async function () {
 		if (!supportsFS) {
-			showAlertModal("Not supported", "Folder sync requires Chrome, Edge, or Brave.");
+			if (!isSecure) {
+				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${location.port || 8000}.`);
+			} else {
+				showAlertModal("Not supported", "Folder sync requires Chrome, Edge, or Brave.");
+			}
 			return;
 		}
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });
-			// Check if a workspace already exists for this folder
-			const existingWs = workspaces.find(w => w.folderName === handle.name);
-			if (existingWs) {
+
+			// Check if a workspace already exists for this exact folder on disk
+			const matchedWs = await findWorkspaceByHandle(handle);
+			if (matchedWs) {
 				// Reconnect the handle and open it
 				workspaceHandle = handle;
-				await idbSet(`handle_${existingWs.id}`, handle);
-				await openWorkspace(existingWs.id);
+				fsPermissionGranted = true;
+				await idbSet(`handle_${matchedWs.id}`, handle);
+				await openWorkspace(matchedWs.id);
 				return;
 			}
+
+			// Check if an existing workspace had this folder name but lost its IndexedDB handle
+			const orphanedWs = workspaces.find(w => w.folderName === handle.name);
+			if (orphanedWs) {
+				const hasStoredHandle = await idbGet(`handle_${orphanedWs.id}`);
+				if (!hasStoredHandle) {
+					showChoiceModal({
+						title: "Reconnect Workspace?",
+						message: `A workspace named "${orphanedWs.name}" was previously linked to a folder named "${handle.name}", but its connection handle was lost. Would you like to reconnect it, or create a new workspace?`,
+						choices: [
+							{
+								label: `Reconnect to "${orphanedWs.name}"`,
+								description: "Update the existing workspace with this folder.",
+								action: "reconnect",
+								primary: true
+							},
+							{
+								label: "Create New Workspace",
+								description: "Keep the existing workspace separate and create a new one.",
+								action: "create"
+							},
+							{
+								label: "Cancel",
+								description: "Do not open this folder.",
+								action: "cancel"
+							}
+						],
+						onSelect: async (action) => {
+							if (action === "reconnect") {
+								workspaceHandle = handle;
+								fsPermissionGranted = true;
+								await idbSet(`handle_${orphanedWs.id}`, handle);
+								const readFiles = await readDirectoryHandle(handle);
+								files = readFiles;
+								orphanedWs.fileCount = countAllFiles(files);
+								saveWorkspaceMeta();
+								saveWsFiles(orphanedWs.id);
+								await openWorkspace(orphanedWs.id, true);
+							} else if (action === "create") {
+								await createNewWorkspaceFromHandle(handle);
+							}
+						}
+					});
+					return;
+				}
+			}
+
 			// Create new workspace from folder
-			const ws = {
-				id: uid("ws"),
-				name: uniqueWsName(handle.name),
-				createdAt: Date.now(),
-				lastOpenedAt: Date.now(),
-				folderName: handle.name,
-				fileCount: 0
-			};
-			workspaces.push(ws);
-			saveWorkspaceMeta();
-
-			// Store handle
-			await idbSet(`handle_${ws.id}`, handle);
-			workspaceHandle = handle;
-
-			// Read folder contents
-			const readFiles = await readDirectoryHandle(handle);
-			files = readFiles;
-			ws.fileCount = countAllFiles(files);
-			saveWorkspaceMeta();
-			saveWsFiles(ws.id);
-
-			await openWorkspace(ws.id, true /* skip file read, already done */);
+			await createNewWorkspaceFromHandle(handle);
 		} catch (err) {
 			if (err.name !== "AbortError") showAlertModal("Error", err.message);
 		}
@@ -435,60 +722,77 @@ document.addEventListener("DOMContentLoaded", async () => {
 	window.handleWelcomeImport = async function (event) {
 		const file = event.target.files[0];
 		if (!file) return;
-		// Create workspace named after the zip
-		const wsName = uniqueWsName(file.name.replace(/\.zip$/i, ""));
-		const ws = {
-			id: uid("ws"),
-			name: wsName,
-			createdAt: Date.now(),
-			lastOpenedAt: Date.now(),
-			folderName: null,
-			fileCount: 0
-		};
-		workspaces.push(ws);
-		saveWorkspaceMeta();
-		activeWsId = ws.id;
 
-		// Import the zip
-		await new Promise(resolve => {
-			const reader = new FileReader();
-			reader.onload = async (e) => {
-				const zip = await JSZip.loadAsync(e.target.result);
-				files = [];
-				const promises = [];
-				const folders = { "": files };
-				zip.forEach((relativePath, zipEntry) => {
-					if (zipEntry.dir) return;
-					promises.push((async () => {
-						const content = await zipEntry.async("string");
-						const parts = relativePath.split("/");
-						const fname = parts.pop();
-						if (!fname) return;
-						let arr = files, curPath = "";
-						for (const dir of parts) {
-							if (!dir) continue;
-							const fp = curPath ? `${curPath}/${dir}` : dir;
-							if (!folders[fp]) {
-								const nf = { id: uid("folder"), name: dir, type: "folder", isOpen: true, children: [] };
-								arr.push(nf); folders[fp] = nf.children;
-							}
-							arr = folders[fp]; curPath = fp;
+		try {
+			const buffer = await file.arrayBuffer();
+			const zip = await JSZip.loadAsync(buffer);
+			const importedFiles = [];
+			const folders = { "": importedFiles };
+
+			const fileEntries = [];
+			zip.forEach((rel, entry) => {
+				if (entry.dir) return;
+				const normalized = rel.replace(/\\/g, "/");
+				fileEntries.push({ path: normalized, entry });
+			});
+
+			// Synchronously build folder hierarchy to prevent race conditions (ZIP-01, ZIP-02)
+			for (const { path } of fileEntries) {
+				const parts = path.split("/");
+				const fname = parts.pop();
+				if (!fname) continue;
+				let arr = importedFiles, curPath = "";
+				for (const dir of parts) {
+					if (!dir) continue;
+					const fp = curPath ? `${curPath}/${dir}` : dir;
+					if (!folders[fp]) {
+						let existingFolder = arr.find(n => n.type === "folder" && n.name === dir);
+						if (!existingFolder) {
+							existingFolder = { id: uid("folder"), name: dir, type: "folder", isOpen: true, children: [] };
+							arr.push(existingFolder);
 						}
-						if (!nameExistsInArray(arr, fname))
-							arr.push({ id: uid("file"), name: fname, type: "file", content });
-					})());
-				});
-				await Promise.all(promises);
-				resolve();
-			};
-			reader.readAsArrayBuffer(file);
-		});
+						folders[fp] = existingFolder.children;
+					}
+					arr = folders[fp];
+					curPath = fp;
+				}
+			}
 
-		event.target.value = "";
-		ws.fileCount = countAllFiles(files);
-		saveWorkspaceMeta();
-		saveWsFiles(ws.id);
-		await openWorkspace(ws.id, true);
+			// Asynchronously read all file contents
+			await Promise.all(fileEntries.map(async ({ path, entry }) => {
+				const content = await entry.async("string");
+				const parts = path.split("/");
+				const fname = parts.pop();
+				if (!fname) return;
+				const dirPath = parts.filter(Boolean).join("/");
+				const arr = folders[dirPath] || importedFiles;
+				if (!nameExistsInArray(arr, fname)) {
+					arr.push({ id: uid("file"), name: fname, type: "file", content });
+				}
+			}));
+
+			// Only instantiate and persist workspace after successful load (ZIP-03)
+			const wsName = uniqueWsName(file.name.replace(/\.zip$/i, ""));
+			const ws = {
+				id: uid("ws"),
+				name: wsName,
+				createdAt: Date.now(),
+				lastOpenedAt: Date.now(),
+				folderName: null,
+				fileCount: countAllFiles(importedFiles)
+			};
+			workspaces.push(ws);
+			files = importedFiles;
+			activeWsId = ws.id;
+			saveWorkspaceMeta();
+			saveWsFiles(ws.id);
+			await openWorkspace(ws.id, true);
+		} catch (err) {
+			console.error("Failed to import ZIP:", err);
+			showAlertModal("Import Failed", "The selected file is not a valid ZIP archive: " + (err.message || err));
+		} finally {
+			event.target.value = "";
+		}
 	};
 
 	window.renameWorkspace = function (wsId) {
@@ -528,12 +832,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const ws = workspaces.find(w => w.id === wsId);
 		if (!ws) return;
 
+		// Save current active workspace before opening the new one
+		if (activeWsId && activeWsId !== wsId) {
+			await autoSaveCurrentFile();
+			saveWsFiles(activeWsId);
+			saveWsConfig(activeWsId);
+			updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
+		}
+
 		activeWsId = wsId;
 		ws.lastOpenedAt = Date.now();
 		saveWorkspaceMeta();
 
 		// Load config for this workspace
 		loadWsConfig(wsId);
+		loadWsDeletions(wsId);
 
 		// Load files (unless already in memory from folder read)
 		if (!skipFileLoad) {
@@ -542,17 +855,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		// Try to restore folder handle from IDB
 		workspaceHandle = null;
+		fsPermissionGranted = false;
 		if (supportsFS && ws.folderName) {
 			try {
 				const h = await idbGet(`handle_${wsId}`);
 				if (h) {
+					workspaceHandle = h;
 					const perm = await h.queryPermission({ mode: "readwrite" });
-					if (perm === "granted") {
-						workspaceHandle = h;
-					} else {
-						// Will need to request permission
-						workspaceHandle = h; // keep handle, request on first sync
-					}
+					fsPermissionGranted = (perm === "granted");
 				}
 			} catch (e) { console.warn("Could not restore handle:", e); }
 		}
@@ -560,8 +870,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 		// Validate selectedId
 		if (selectedId && !findNode(files, selectedId)) selectedId = null;
 
+		// If no selectedId, but openTabs has valid files, select the first valid tab
+		if (!selectedId && openTabs.length > 0) {
+			const validTab = openTabs.find(tid => {
+				const n = findNode(files, tid);
+				return n && n.type === "file";
+			});
+			if (validTab) selectedId = validTab;
+		}
+
 		// Save active workspace ID so page reload returns here directly
-		localStorage.setItem("keeplocal_active_ws_id", wsId);
+		try {
+			localStorage.setItem("keeplocal_active_ws_id", wsId);
+		} catch (e) {
+			handleStorageError(e, "openWorkspace");
+		}
 
 		// Switch views
 		welcomeScreen.classList.add("hidden");
@@ -576,6 +899,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		updateFolderUI();
 		render();
 		await loadFile();
+		checkStorageQuota();
 
 		if (window.lucide) lucide.createIcons();
 	}
@@ -589,11 +913,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 			// update file count
 			updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
 		}
-		localStorage.removeItem("keeplocal_active_ws_id");
+		try {
+			localStorage.removeItem("keeplocal_active_ws_id");
+		} catch (_) { }
 		activeWsId = null;
 		workspaceHandle = null;
+		fsPermissionGranted = false;
 		files = [];
 		selectedId = null;
+		editorLoadedFileId = null;
+		pendingDeletions = [];
 		// Destroy editor instance to avoid memory leak
 		if (editorInstance) {
 			try { editorInstance.destroy(); } catch (_) { }
@@ -602,13 +931,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 		showWelcome();
 	};
 
-	async function autoSaveCurrentFile() {
-		const f = findNode(files, selectedId);
+	async function autoSaveCurrentFile(targetId = null) {
+		clearTimeout(editorSaveTimer);
+		editorSaveTimer = null;
+		if (isInitEditor) return;
+		const idToSave = targetId || editorLoadedFileId || selectedId;
+		if (!idToSave) return;
+		const f = findNode(files, idToSave);
 		if (!f || f.type !== "file") return;
-		if (editorMode === "block" && editorInstance) {
-			try { const d = await editorInstance.save(); f.content = blocksToText(d); } catch (_) { }
-		} else {
+		const isMarkdown = isMarkdownFile(f.name);
+		if (editorMode === "block" && isMarkdown && editorInstance) {
+			try {
+				const d = await editorInstance.save();
+				f.content = blocksToText(d);
+				if (editorTextarea) editorTextarea.value = f.content;
+			} catch (_) { }
+		} else if (editorTextarea) {
 			f.content = editorTextarea.value;
+		}
+		persistCurrent();
+		if (workspaceHandle) {
+			await syncWorkspace();
 		}
 	}
 
@@ -702,10 +1045,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 				"important"
 			);
 
-			// Editor.js creates these elements dynamically
+			// Editor.js creates these elements dynamically (headings scale via CSS calc)
 			editorjsWrapper
 				.querySelectorAll(
-					".ce-paragraph, .cdx-block, .ce-code__textarea, " +
+					".ce-paragraph, .cdx-block:not(.ce-header), .ce-code__textarea, " +
 					".cdx-quote, .cdx-list, .cdx-checklist, .tc-cell"
 				)
 				.forEach(el => {
@@ -715,83 +1058,101 @@ document.addEventListener("DOMContentLoaded", async () => {
 						"important"
 					);
 				});
-
-			// Headings
-			editorjsWrapper
-				.querySelectorAll(".ce-header")
-				.forEach(el => {
-					el.style.setProperty(
-						"font-size",
-						`${fontSize * 1.6}px`,
-						"important"
-					);
-				});
 		}
 
 		applyWordWrapUI();
 	}
 
 	function updateEditorModeUI() {
+		const f = selectedId ? findNode(files, selectedId) : null;
+		const hasFile = !!(f && f.type === "file");
+		const isMarkdown = hasFile && isMarkdownFile(f.name);
+
+		if (modeSwitchGroup) {
+			if (isMarkdown) {
+				modeSwitchGroup.classList.remove("hidden");
+			} else {
+				modeSwitchGroup.classList.add("hidden");
+			}
+		}
+
 		if (editorMode === "block") {
 			modeBlockBtn?.classList.add("active");
 			modePlainBtn?.classList.remove("active");
-			editorjsWrapper?.classList.remove("hidden");
-			plainWrapper?.classList.add("hidden");
-			if (editorStatusSpan) editorStatusSpan.textContent = "Block Mode";
+			if (hasFile && isMarkdown) {
+				editorjsWrapper?.classList.remove("hidden");
+				plainWrapper?.classList.add("hidden");
+				if (editorStatusSpan) editorStatusSpan.textContent = "Block Mode";
+			} else if (hasFile) {
+				plainWrapper?.classList.remove("hidden");
+				editorjsWrapper?.classList.add("hidden");
+				if (editorStatusSpan) editorStatusSpan.textContent = "Raw Text";
+			}
 		} else {
 			modePlainBtn?.classList.add("active");
 			modeBlockBtn?.classList.remove("active");
-			plainWrapper?.classList.remove("hidden");
-			editorjsWrapper?.classList.add("hidden");
-			if (editorStatusSpan) editorStatusSpan.textContent = "Raw Text";
+			if (hasFile) {
+				plainWrapper?.classList.remove("hidden");
+				editorjsWrapper?.classList.add("hidden");
+				if (editorStatusSpan) editorStatusSpan.textContent = "Raw Text";
+			}
 		}
 	}
 
 	function updateFolderUI() {
-		const pathBar = document.getElementById("workspacePathBar");
 		const wsFolderLabel = document.getElementById("sidebarWsFolder");
 
 		// Browser doesn't support folder sync at all — leave the
 		// "unsupported browser" state from initWorkspaceButton() alone.
 		if (!supportsFS) {
-			if (workspacePathLabel) workspacePathLabel.textContent = "Local workspace";
 			if (wsFolderLabel) {
 				wsFolderLabel.textContent = "Local storage";
 				wsFolderLabel.classList.remove("has-folder");
 			}
-			if (wsSyncBtn) wsSyncBtn.style.display = "none";
 			if (wsStatusBadge) {
 				wsStatusBadge.textContent = "No folder";
 				wsStatusBadge.classList.remove("connected");
 			}
-			pathBar?.classList.remove("has-folder");
 			if (window.lucide) lucide.createIcons();
 			return;
 		}
 
 		if (workspaceHandle) {
-			if (workspacePathLabel) workspacePathLabel.textContent = workspaceHandle.name;
 			if (wsFolderLabel) {
-				wsFolderLabel.textContent = workspaceHandle.name;
+				wsFolderLabel.textContent = fsPermissionGranted
+					? workspaceHandle.name
+					: `${workspaceHandle.name} (not authorized)`;
 				wsFolderLabel.classList.add("has-folder");
 			}
-			if (wsSyncBtn) wsSyncBtn.style.display = "flex";
 			if (wsStatusBadge) {
-				wsStatusBadge.textContent = workspaceHandle.name;
-				wsStatusBadge.classList.add("connected");
+				if (fsPermissionGranted) {
+					wsStatusBadge.textContent = workspaceHandle.name;
+					wsStatusBadge.className = "ws-status-badge connected";
+					wsStatusBadge.title = `Synced with folder "${workspaceHandle.name}"`;
+					wsStatusBadge.onclick = null;
+				} else {
+					wsStatusBadge.textContent = `⚠️ Re-authorize "${workspaceHandle.name}"`;
+					wsStatusBadge.className = "ws-status-badge needs-permission";
+					wsStatusBadge.title = `Click to re-authorize disk sync with "${workspaceHandle.name}"`;
+					wsStatusBadge.onclick = () => requestReauthorization();
+				}
 			}
 			if (saveWorkspaceBtn) {
-				saveWorkspaceBtn.innerHTML = '<i data-lucide="hard-drive" size="14"></i> <span>Change Folder</span>';
-				saveWorkspaceBtn.title = `Currently synced with "${workspaceHandle.name}" — click to connect a different folder`;
+				if (fsPermissionGranted) {
+					saveWorkspaceBtn.innerHTML = '<i data-lucide="hard-drive" size="14"></i> <span>Change Folder</span>';
+					saveWorkspaceBtn.title = `Currently synced with "${workspaceHandle.name}" — click to connect a different folder`;
+					saveWorkspaceBtn.onclick = () => saveWorkspace();
+				} else {
+					saveWorkspaceBtn.innerHTML = '<i data-lucide="shield-alert" size="14"></i> <span>Re-authorize Folder</span>';
+					saveWorkspaceBtn.title = `Click to grant permission to sync with "${workspaceHandle.name}"`;
+					saveWorkspaceBtn.onclick = () => requestReauthorization();
+				}
 			}
-			pathBar?.classList.add("has-folder");
 		} else {
-			if (workspacePathLabel) workspacePathLabel.textContent = "Local workspace";
 			if (wsFolderLabel) {
 				wsFolderLabel.textContent = "Local storage";
 				wsFolderLabel.classList.remove("has-folder");
 			}
-			if (wsSyncBtn) wsSyncBtn.style.display = "none";
 			if (wsStatusBadge) {
 				wsStatusBadge.textContent = "No folder";
 				wsStatusBadge.classList.remove("connected");
@@ -800,17 +1161,41 @@ document.addEventListener("DOMContentLoaded", async () => {
 				saveWorkspaceBtn.innerHTML = '<i data-lucide="hard-drive" size="14"></i> <span>Connect Folder</span>';
 				saveWorkspaceBtn.title = "Connect a local folder to sync files";
 			}
-			pathBar?.classList.remove("has-folder");
 		}
+		checkStorageQuota();
 		if (window.lucide) lucide.createIcons();
 	}
+
+	window.requestReauthorization = async function () {
+		if (!workspaceHandle) return;
+		try {
+			const perm = await workspaceHandle.requestPermission({ mode: "readwrite" });
+			if (perm === "granted") {
+				fsPermissionGranted = true;
+				updateFolderUI();
+				await syncWorkspace(true);
+			} else {
+				showAlertModal(
+					"Permission Required",
+					`Permission to access folder "${workspaceHandle.name}" was not granted. Notes will only be saved in browser storage until access is granted.`
+				);
+			}
+		} catch (err) {
+			showAlertModal("Authorization Error", err.message);
+		}
+	};
 
 	function initWorkspaceButton() {
 		if (!supportsFS) {
 			saveWorkspaceBtn.disabled = true;
 			saveWorkspaceBtn.classList.add("disabled");
-			saveWorkspaceBtn.title = "Folder sync requires Chrome, Edge, or Brave";
-			browserSupportMsg?.classList.remove("hidden");
+			saveWorkspaceBtn.title = !isSecure ? "Folder sync requires a Secure Context (localhost/HTTPS)" : "Folder sync requires Chrome, Edge, or Brave";
+			if (browserSupportMsg) {
+				browserSupportMsg.classList.remove("hidden");
+				if (!isSecure) {
+					browserSupportMsg.innerHTML = `⚠ Folder sync requires a Secure Context. Access via <a href="http://localhost:${location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
+				}
+			}
 		}
 	}
 
@@ -850,8 +1235,37 @@ document.addEventListener("DOMContentLoaded", async () => {
 		search(files);
 		return path;
 	}
+
+	function findNodeByPath(nodes, targetPath) {
+		const search = (items, curPath = "") => {
+			for (const item of items) {
+				const p = curPath ? `${curPath}/${item.name}` : item.name;
+				if (p === targetPath) return item;
+				if (item.children) {
+					const found = search(item.children, p);
+					if (found) return found;
+				}
+			}
+			return null;
+		};
+		return search(nodes);
+	}
 	function nameExistsInArray(arr, name, excludeId = null) {
 		return arr.some(n => n.name.toLowerCase() === name.toLowerCase() && n.id !== excludeId);
+	}
+
+	function uniqueNodeName(arr, name, excludeId = null) {
+		if (!nameExistsInArray(arr, name, excludeId)) return name;
+		const dot = name.lastIndexOf(".");
+		const base = dot > 0 ? name.slice(0, dot) : name;
+		const ext = dot > 0 ? name.slice(dot) : "";
+		let c = 1;
+		let newName = `${base} (${c})${ext}`;
+		while (nameExistsInArray(arr, newName, excludeId)) {
+			c++;
+			newName = `${base} (${c})${ext}`;
+		}
+		return newName;
 	}
 
 	function wsNameExists(name, excludeId = null) {
@@ -886,6 +1300,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const modalConfirmBtns = document.getElementById("modalConfirmButtons");
 	const modalConfirmBtn = document.getElementById("modalConfirmBtn");
 	const modalCancelBtn = document.getElementById("modalCancelBtn");
+	const modalChoiceBtns = document.getElementById("modalChoiceButtons");
+	const modalAlertBtns = document.getElementById("modalAlertButtons");
+	const modalAlertOkBtn = document.getElementById("modalAlertOkBtn");
+	if (modalAlertOkBtn) {
+		modalAlertOkBtn.onclick = () => hideModal();
+	}
 	let modalCb = null;
 
 	function showInputModal(title, def, cb) {
@@ -896,6 +1316,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalInputHint.classList.remove("hidden");
 		modalInputHint.innerHTML = "Press <b>Enter</b> to confirm, <b>Esc</b> to cancel";
 		modalConfirmBtns.classList.add("hidden");
+		if (modalAlertBtns) modalAlertBtns.classList.add("hidden");
+		if (modalChoiceBtns) { modalChoiceBtns.innerHTML = ""; modalChoiceBtns.classList.add("hidden"); }
 		modalOverlay.classList.add("active");
 		setTimeout(() => { modalInput.focus(); modalInput.select(); }, 30);
 		modalCb = cb;
@@ -907,10 +1329,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalMessage.classList.remove("hidden");
 		modalInputHint.classList.add("hidden");
 		modalConfirmBtns.classList.remove("hidden");
+		if (modalAlertBtns) modalAlertBtns.classList.add("hidden");
+		if (modalChoiceBtns) { modalChoiceBtns.innerHTML = ""; modalChoiceBtns.classList.add("hidden"); }
 		modalConfirmBtn.textContent = danger ? "Delete" : "Confirm";
 		modalConfirmBtn.className = danger ? "modal-btn danger" : "modal-btn primary";
 		modalOverlay.classList.add("active");
 		modalCb = cb;
+		setTimeout(() => { if (modalConfirmBtn) modalConfirmBtn.focus(); }, 30);
 	}
 	function showAlertModal(title, msg) {
 		modalTitle.textContent = title;
@@ -918,12 +1343,67 @@ document.addEventListener("DOMContentLoaded", async () => {
 		modalInput.classList.add("hidden");
 		modalMessage.classList.remove("hidden");
 		modalConfirmBtns.classList.add("hidden");
+		if (modalAlertBtns) modalAlertBtns.classList.remove("hidden");
 		modalInputHint.classList.remove("hidden");
-		modalInputHint.innerHTML = "Press <b>Esc</b> to close";
+		modalInputHint.innerHTML = "Press <b>Esc</b> or click OK to close";
+		if (modalChoiceBtns) { modalChoiceBtns.innerHTML = ""; modalChoiceBtns.classList.add("hidden"); }
 		modalOverlay.classList.add("active");
 		modalCb = null;
+		setTimeout(() => { if (modalAlertOkBtn) modalAlertOkBtn.focus(); }, 30);
 	}
-	function hideModal() { modalOverlay.classList.remove("active"); modalCb = null; }
+	function showChoiceModal({ title, message, choices, onSelect }) {
+		modalTitle.textContent = title;
+		modalMessage.textContent = message;
+		modalInput.classList.add("hidden");
+		modalMessage.classList.remove("hidden");
+		modalConfirmBtns.classList.add("hidden");
+		if (modalAlertBtns) modalAlertBtns.classList.add("hidden");
+		modalInputHint.classList.remove("hidden");
+		modalInputHint.innerHTML = "Press <b>Esc</b> to cancel";
+
+		if (modalChoiceBtns) {
+			modalChoiceBtns.innerHTML = "";
+			modalChoiceBtns.classList.remove("hidden");
+
+			choices.forEach(ch => {
+				const btn = document.createElement("button");
+				btn.className = `modal-choice-btn ${ch.primary ? "primary" : ch.danger ? "danger" : ""}`;
+				btn.innerHTML = `
+					<span class="modal-choice-btn-title">${escHtml(ch.label)}</span>
+					${ch.description ? `<span class="modal-choice-btn-desc">${escHtml(ch.description)}</span>` : ""}
+				`;
+				btn.onclick = () => {
+					hideModal();
+					if (onSelect) onSelect(ch.action);
+				};
+				modalChoiceBtns.appendChild(btn);
+			});
+		}
+
+		modalOverlay.classList.add("active");
+		modalCb = (confirmed) => {
+			if (!confirmed && onSelect) onSelect("cancel");
+		};
+		setTimeout(() => {
+			const firstChoice = modalChoiceBtns?.querySelector("button");
+			if (firstChoice) firstChoice.focus();
+		}, 30);
+	}
+	function hideModal() {
+		modalOverlay.classList.remove("active");
+		if (modalConfirmBtns) modalConfirmBtns.classList.add("hidden");
+		if (modalAlertBtns) modalAlertBtns.classList.add("hidden");
+		if (modalChoiceBtns) {
+			modalChoiceBtns.innerHTML = "";
+			modalChoiceBtns.classList.add("hidden");
+		}
+		modalCb = null;
+	}
+	window.showInputModal = showInputModal;
+	window.showConfirmModal = showConfirmModal;
+	window.showAlertModal = showAlertModal;
+	window.showChoiceModal = showChoiceModal;
+	window.hideModal = hideModal;
 
 	modalInput.addEventListener("keydown", (e) => {
 		if (e.key === "Enter") {
@@ -940,36 +1420,255 @@ document.addEventListener("DOMContentLoaded", async () => {
 	modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) hideModal(); });
 
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && modalOverlay.classList.contains("active")) {
+		if (!modalOverlay.classList.contains("active")) return;
+		if (e.key === "Escape") {
 			e.preventDefault();
 			hideModal();
+			return;
+		}
+		if (e.key === "Tab") {
+			const container = document.querySelector(".modal-container");
+			if (!container) return;
+			const focusable = Array.from(
+				container.querySelectorAll(
+					'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+				)
+			).filter(el => el.offsetParent !== null && !el.closest(".hidden"));
+
+			if (focusable.length === 0) return;
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+
+			if (e.shiftKey) {
+				if (document.activeElement === first || !container.contains(document.activeElement)) {
+					e.preventDefault();
+					last.focus();
+				}
+			} else {
+				if (document.activeElement === last || !container.contains(document.activeElement)) {
+					e.preventDefault();
+					first.focus();
+				}
+			}
 		}
 	});
+
+	// ============================================================
+	// HELP / ONBOARDING MODAL
+	// ============================================================
+	const helpModalOverlay = document.getElementById("helpModalOverlay");
+
+	function openHelpModal() {
+		if (!helpModalOverlay) return;
+		helpModalOverlay.classList.add("active");
+		if (window.lucide) lucide.createIcons();
+		const focusBtn = helpModalOverlay.querySelector(".help-got-it-btn") || helpModalOverlay.querySelector(".help-close-btn");
+		setTimeout(() => { if (focusBtn) focusBtn.focus(); }, 30);
+	}
+
+	function hideHelpModal() {
+		if (!helpModalOverlay) return;
+		helpModalOverlay.classList.remove("active");
+	}
+
+	function toggleHelpModal() {
+		if (helpModalOverlay?.classList.contains("active")) {
+			hideHelpModal();
+		} else {
+			openHelpModal();
+		}
+	}
+
+	window.openHelpModal = openHelpModal;
+	window.hideHelpModal = hideHelpModal;
+	window.toggleHelpModal = toggleHelpModal;
+
+	helpModalOverlay?.addEventListener("click", (e) => {
+		if (e.target === helpModalOverlay) hideHelpModal();
+	});
+
+	document.addEventListener("keydown", (e) => {
+		if (!helpModalOverlay || !helpModalOverlay.classList.contains("active")) return;
+		if (e.key === "Escape" || e.key === "?" || e.key === "F1" || (e.altKey && (e.key.toLowerCase() === "h" || e.code === "KeyH"))) {
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			hideHelpModal();
+			return;
+		}
+		if (e.key === "Tab") {
+			const container = helpModalOverlay.querySelector(".help-modal-container");
+			if (!container) return;
+			const focusable = Array.from(
+				container.querySelectorAll(
+					'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+				)
+			).filter(el => el.offsetParent !== null && !el.closest(".hidden"));
+
+			if (focusable.length === 0) return;
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+
+			if (e.shiftKey) {
+				if (document.activeElement === first || !container.contains(document.activeElement)) {
+					e.preventDefault();
+					last.focus();
+				}
+			} else {
+				if (document.activeElement === last || !container.contains(document.activeElement)) {
+					e.preventDefault();
+					first.focus();
+				}
+			}
+		}
+	});
+
 	// ============================================================
 	// FILESYSTEM SYNC
 	// ============================================================
+	function mergeFileTrees(baseFolderFiles, localFiles) {
+		const merged = JSON.parse(JSON.stringify(baseFolderFiles));
+
+		function mergeNodes(targetArr, sourceNodes) {
+			for (const src of sourceNodes) {
+				if (src.type === "file") {
+					const existing = targetArr.find(x => x.name.toLowerCase() === src.name.toLowerCase());
+					if (!existing) {
+						targetArr.push(JSON.parse(JSON.stringify(src)));
+					} else if (existing.content !== src.content) {
+						const dot = src.name.lastIndexOf(".");
+						const baseName = dot > 0 ? src.name.slice(0, dot) : src.name;
+						const ext = dot > 0 ? src.name.slice(dot) : "";
+						let counter = 1;
+						let uniqueName = `${baseName} (local)${ext}`;
+						while (nameExistsInArray(targetArr, uniqueName)) {
+							counter++;
+							uniqueName = `${baseName} (local ${counter})${ext}`;
+						}
+						targetArr.push({ ...JSON.parse(JSON.stringify(src)), id: uid("file"), name: uniqueName });
+					}
+				} else if (src.type === "folder") {
+					const existingFolder = targetArr.find(x => x.type === "folder" && x.name.toLowerCase() === src.name.toLowerCase());
+					if (!existingFolder) {
+						targetArr.push(JSON.parse(JSON.stringify(src)));
+					} else {
+						existingFolder.children = existingFolder.children || [];
+						mergeNodes(existingFolder.children, src.children || []);
+					}
+				}
+			}
+		}
+
+		mergeNodes(merged, localFiles);
+		return merged;
+	}
+
 	window.saveWorkspace = async function () {
-		if (!supportsFS) { showAlertModal("Not supported", "Requires Chrome, Edge, or Brave."); return; }
+		if (!supportsFS) {
+			if (!isSecure) {
+				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${location.port || 8000}.`);
+			} else {
+				showAlertModal("Not supported", "Requires Chrome, Edge, or Brave.");
+			}
+			return;
+		}
+		await autoSaveCurrentFile();
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });
-			workspaceHandle = handle;
-			await idbSet(`handle_${activeWsId}`, handle);
-			updateWsMeta(activeWsId, { folderName: handle.name });
 
-			const readFiles = await readDirectoryHandle(handle);
-			if (readFiles.length > 0) {
-				// Always load the chosen folder's content
-				files = readFiles;
-				saveWsFiles(activeWsId);
-			} else {
-				// Empty folder: push existing local files to it
-				await saveNodes(handle, files);
+			// Check if another workspace is already linked to this exact folder handle
+			const otherWs = await findWorkspaceByHandle(handle);
+			if (otherWs && otherWs.id !== activeWsId) {
+				const proceed = await new Promise(res => {
+					showChoiceModal({
+						title: "Folder Already Connected",
+						message: `The folder "${handle.name}" is already linked to another workspace ("${otherWs.name}"). Connecting it here will share this folder across both workspaces. Do you want to proceed?`,
+						choices: [
+							{
+								label: "Connect Anyway",
+								description: "Share this folder with both workspaces.",
+								action: "connect",
+								primary: true
+							},
+							{
+								label: "Cancel",
+								description: "Do not connect this folder.",
+								action: "cancel"
+							}
+						],
+						onSelect: action => res(action === "connect")
+					});
+				});
+				if (!proceed) return;
 			}
 
-			updateFolderUI();
-			render();
-			if (!selectedId) { selectedId = findFirstFile(files)?.id || null; }
-			await loadFile();
+			const readFiles = await readDirectoryHandle(handle);
+
+			const finalizeConnection = async (chosenFiles, pushToDisk = false) => {
+				workspaceHandle = handle;
+				fsPermissionGranted = true;
+				await idbSet(`handle_${activeWsId}`, handle);
+				updateWsMeta(activeWsId, { folderName: handle.name, fileCount: countAllFiles(chosenFiles) });
+				files = chosenFiles;
+				saveWsFiles(activeWsId);
+				if (pushToDisk) {
+					await saveNodes(handle, files);
+				}
+				updateFolderUI();
+				render();
+				if (!selectedId || !findNode(files, selectedId)) {
+					selectedId = findFirstFile(files)?.id || null;
+				}
+				await loadFile();
+			};
+
+			const localFileCount = countAllFiles(files);
+			const folderFileCount = countAllFiles(readFiles);
+
+			// Case 1: Folder has files AND local workspace has existing notes -> Smart Prompt
+			if (localFileCount > 0 && folderFileCount > 0) {
+				showChoiceModal({
+					title: "Connect Folder: Existing Files Detected",
+					message: `The folder "${handle.name}" contains ${folderFileCount} note${folderFileCount === 1 ? "" : "s"}, but your workspace already has ${localFileCount} local note${localFileCount === 1 ? "" : "s"}. What would you like to do?`,
+					choices: [
+						{
+							label: "Merge Notes (Recommended)",
+							description: "Keep both: copy local notes into the folder and import folder notes.",
+							action: "merge",
+							primary: true
+						},
+						{
+							label: "Use Folder Notes Only",
+							description: "Replace current local notes with the files from the chosen folder.",
+							action: "replace",
+							danger: true
+						},
+						{
+							label: "Cancel",
+							description: "Do not connect this folder. Pick an empty folder if you want a clean sync.",
+							action: "cancel"
+						}
+					],
+					onSelect: async (action) => {
+						if (action === "merge") {
+							const merged = mergeFileTrees(readFiles, files);
+							await finalizeConnection(merged, true /* push local notes to folder */);
+						} else if (action === "replace") {
+							await finalizeConnection(readFiles, false);
+						}
+					}
+				});
+				return;
+			}
+
+			// Case 2: Folder is empty -> push local files to it
+			if (folderFileCount === 0) {
+				await finalizeConnection(files, true);
+				return;
+			}
+
+			// Case 3: Local workspace is empty -> load folder's files
+			await finalizeConnection(readFiles, false);
+
 		} catch (err) {
 			if (err.name !== "AbortError") showAlertModal("Error", err.message);
 		}
@@ -980,30 +1679,63 @@ document.addEventListener("DOMContentLoaded", async () => {
 			showAlertModal("No Folder Connected", "Connect a system folder to enable folder re-syncing.");
 			return;
 		}
+		await autoSaveCurrentFile();
 		try {
 			const perm = await workspaceHandle.requestPermission({ mode: "readwrite" });
-			if (perm !== "granted") { showAlertModal("Permission denied", "Could not access the folder."); return; }
-			files = await readDirectoryHandle(workspaceHandle);
+			if (perm !== "granted") {
+				fsPermissionGranted = false;
+				updateFolderUI();
+				showAlertModal("Permission denied", "Could not access the folder.");
+				return;
+			}
+			fsPermissionGranted = true;
+			updateFolderUI();
+
+			// Cancel pending debounced disk sync so stale memory isn't written back to disk
+			if (diskSyncTimer) {
+				clearTimeout(diskSyncTimer);
+				diskSyncTimer = null;
+			}
+			if (isSyncing) {
+				await new Promise(r => syncWaiters.push(r));
+			}
+
+			const prevSelectedId = selectedId;
+			const prevSelectedPath = selectedId ? getPath(selectedId).map(n => n.name).join("/") : null;
+
+			files = await readDirectoryHandle(workspaceHandle, files);
 			if (activeWsId) {
 				saveWsFiles(activeWsId);
 				updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
 			}
-			selectedId = null;
+
+			// Preserve selectedId if file still exists on disk
+			if (prevSelectedId && findNode(files, prevSelectedId)) {
+				selectedId = prevSelectedId;
+			} else if (prevSelectedPath) {
+				const found = findNodeByPath(files, prevSelectedPath);
+				selectedId = found ? found.id : null;
+			} else {
+				selectedId = null;
+			}
+
 			render();
 			await loadFile();
 			wsStatusBadge.textContent = "Synced ✓";
-			setTimeout(() => { wsStatusBadge.textContent = workspaceHandle.name; }, 1500);
+			setTimeout(() => {
+				if (workspaceHandle && fsPermissionGranted) wsStatusBadge.textContent = workspaceHandle.name;
+			}, 1500);
 		} catch (e) { showAlertModal("Sync error", e.message); }
 	};
 
-	async function readDirectoryHandle(dirHandle) {
+	async function readDirectoryHandle(dirHandle, existingNodes = null) {
 		const SKIP = new Set(["node_modules", ".git", ".svn", "dist", "build", "__pycache__", ".next", ".cache"]);
 		const TEXT_EXTS = new Set(["txt", "md", "js", "ts", "jsx", "tsx", "html", "css", "json", "yaml", "yml",
 			"toml", "xml", "csv", "sh", "bash", "py", "rb", "go", "rs", "java", "c", "cpp", "h", "php",
 			"vue", "svelte", "env", "gitignore", "dockerfile", "sql", "graphql", "mdx", "ini", "cfg", "conf", "log"]);
 		const result = [];
 
-		async function readDir(handle, arr) {
+		async function readDir(handle, arr, existingArr = null) {
 			const entries = [];
 			for await (const [name, entry] of handle.entries()) entries.push([name, entry]);
 			entries.sort((a, b) => {
@@ -1012,53 +1744,175 @@ document.addEventListener("DOMContentLoaded", async () => {
 			});
 			for (const [name, entry] of entries) {
 				if (name.startsWith(".")) continue;
+				const matchedExisting = Array.isArray(existingArr)
+					? existingArr.find(n => n.name === name && (n.type === (entry.kind === "directory" ? "folder" : "file")))
+					: null;
+
 				if (entry.kind === "directory") {
 					if (SKIP.has(name)) continue;
 					const children = [];
-					await readDir(entry, children);
-					arr.push({ id: uid("folder"), name, type: "folder", isOpen: false, children });
+					await readDir(entry, children, matchedExisting?.children);
+					arr.push({
+						id: matchedExisting?.id || uid("folder"),
+						name,
+						type: "folder",
+						isOpen: matchedExisting ? !!matchedExisting.isOpen : false,
+						children
+					});
 				} else {
 					const ext = name.split(".").pop()?.toLowerCase();
 					if (!TEXT_EXTS.has(ext)) continue;
 					try {
 						const f = await entry.getFile();
 						const content = await f.text();
-						arr.push({ id: uid("file"), name, type: "file", content });
+						arr.push({
+							id: matchedExisting?.id || uid("file"),
+							name,
+							type: "file",
+							content,
+							_diskContent: content
+						});
 					} catch (e) { console.warn("Skip:", name, e); }
 				}
 			}
 		}
-		await readDir(dirHandle, result);
+		await readDir(dirHandle, result, existingNodes);
 		return result;
 	}
 
 	async function writeFile(dirHandle, name, content) {
 		const fh = await dirHandle.getFileHandle(name, { create: true });
 		const w = await fh.createWritable();
-		await w.write(content); await w.close();
+		await w.write(content);
+		await w.close();
 	}
 
 	async function saveNodes(dirHandle, nodes) {
 		for (const n of nodes) {
-			if (n.type === "file") await writeFile(dirHandle, n.name, n.content || "");
-			else { const sub = await dirHandle.getDirectoryHandle(n.name, { create: true }); await saveNodes(sub, n.children || []); }
+			if (n.type === "file") {
+				if (n._diskContent !== n.content) {
+					await writeFile(dirHandle, n.name, n.content || "");
+					n._diskContent = n.content || "";
+				}
+			} else {
+				const sub = await dirHandle.getDirectoryHandle(n.name, { create: true });
+				await saveNodes(sub, n.children || []);
+			}
 		}
 	}
 
-	async function syncWorkspace() {
+	let diskSyncTimer = null;
+	let isSyncing = false;
+	let syncPending = false;
+	let syncWaiters = [];
+
+	function requestDiskSync(delay = 1000) {
 		if (!workspaceHandle) return;
+		clearTimeout(diskSyncTimer);
+		diskSyncTimer = setTimeout(() => {
+			diskSyncTimer = null;
+			performDiskSync();
+		}, delay);
+	}
+
+	async function flushDiskSync() {
+		if (diskSyncTimer) {
+			clearTimeout(diskSyncTimer);
+			diskSyncTimer = null;
+		}
+		if (!workspaceHandle) return;
+		if (isSyncing) {
+			syncPending = true;
+			return new Promise((resolve) => {
+				syncWaiters.push(resolve);
+			});
+		}
+		return performDiskSync();
+	}
+
+	async function performDiskSync() {
+		if (!workspaceHandle) return;
+		if (!fsPermissionGranted) {
+			updateFolderUI();
+			return;
+		}
+		if (isSyncing) {
+			syncPending = true;
+			return new Promise((resolve) => {
+				syncWaiters.push(resolve);
+			});
+		}
+
+		isSyncing = true;
+		if (wsStatusBadge && workspaceHandle) {
+			wsStatusBadge.textContent = "Saving…";
+		}
+
 		try {
-			// Clean disk directory to mirror deleted/removed items in UI state
-			const activeNames = new Set(files.map(f => f.name));
-			for await (const [name] of workspaceHandle.entries()) {
-				if (!activeNames.has(name) && !name.startsWith(".")) {
+			// Process only explicitly tracked deletions (never purge unmanaged disk entries)
+			if (pendingDeletions.length > 0) {
+				const remaining = [];
+				for (const item of pendingDeletions) {
 					try {
-						await workspaceHandle.removeEntry(name, { recursive: true });
-					} catch (err) { console.warn("Could not remove entry:", name, err); }
+						let dir = workspaceHandle;
+						for (const part of item.pathParts) {
+							dir = await dir.getDirectoryHandle(part, { create: false });
+						}
+						await dir.removeEntry(item.name, { recursive: true });
+					} catch (err) {
+						if (err.name === "NotAllowedError") {
+							fsPermissionGranted = false;
+							updateFolderUI();
+							remaining.push(item);
+						} else if (err.name !== "NotFoundError") {
+							console.warn("Could not remove entry from disk:", item, err);
+						}
+					}
 				}
+				pendingDeletions = remaining;
+				if (activeWsId) saveWsDeletions(activeWsId);
 			}
+
+			// Write managed files to disk (with dirty checking)
 			await saveNodes(workspaceHandle, files);
-		} catch (e) { console.warn("Sync:", e); }
+
+			if (wsStatusBadge && workspaceHandle && fsPermissionGranted) {
+				wsStatusBadge.textContent = "Saved ✓";
+				setTimeout(() => {
+					if (workspaceHandle && fsPermissionGranted && !isSyncing && !syncPending) {
+						wsStatusBadge.textContent = workspaceHandle.name;
+					}
+				}, 1500);
+			}
+		} catch (e) {
+			if (e.name === "NotAllowedError") {
+				fsPermissionGranted = false;
+				updateFolderUI();
+			} else {
+				console.warn("Sync error:", e);
+			}
+		} finally {
+			isSyncing = false;
+			const waiters = [...syncWaiters];
+			syncWaiters = [];
+
+			if (syncPending) {
+				syncPending = false;
+				performDiskSync().then(() => {
+					waiters.forEach(res => res());
+				});
+			} else {
+				waiters.forEach(res => res());
+			}
+		}
+	}
+
+	async function syncWorkspace(immediate = true) {
+		if (immediate) {
+			return flushDiskSync();
+		} else {
+			requestDiskSync(1000);
+		}
 	}
 
 	// ============================================================
@@ -1073,29 +1927,42 @@ document.addEventListener("DOMContentLoaded", async () => {
 		return { array: p ? p.children : files, node: p };
 	}
 
-	window.addFile = function () {
-		const t = getTarget();
-		let name = "untitled.md", c = 1;
-		while (nameExistsInArray(t.array, name)) name = `untitled-${c++}.md`;
-		const nf = { id: uid("file"), name, type: "file", content: "" };
-		t.array.push(nf);
-		if (t.node) t.node.isOpen = true;
-		selectedId = nf.id;
-		persistCurrent();
-		render();
-		setTimeout(() => beginInlineRename(nf.id), 40);
-		loadFile();
-		syncWorkspace();
+	window.addFile = async function () {
+		if (isAddingFile) return;
+		isAddingFile = true;
+		try {
+			await autoSaveCurrentFile();
+			const t = getTarget();
+			let name = "untitled.md", c = 1;
+			while (nameExistsInArray(t.array, name)) name = `untitled-${c++}.md`;
+			const nf = { id: uid("file"), name, type: "file", content: "" };
+			t.array.push(nf);
+			if (t.node) t.node.isOpen = true;
+			if (!openTabs.includes(nf.id)) {
+				openTabs.push(nf.id);
+			}
+			selectedId = nf.id;
+			persistCurrent();
+			render();
+			setTimeout(() => beginInlineRename(nf.id), 40);
+			await loadFile();
+			syncWorkspace();
+		} finally {
+			isAddingFile = false;
+		}
 	};
 
-	window.addFolder = function () {
+	window.addFolder = async function () {
+		if (selectedId && findNode(files, selectedId)?.type === "file") {
+			await autoSaveCurrentFile();
+		}
 		const t = getTarget();
 		let name = "New Folder", c = 1;
 		while (nameExistsInArray(t.array, name)) name = `New Folder ${c++}`;
 		const nf = { id: uid("folder"), name, type: "folder", isOpen: true, children: [] };
 		t.array.push(nf);
 		if (t.node) t.node.isOpen = true;
-		selectedId = nf.id;
+		// Leave selectedId pointing to current active file to prevent stale un-savable editor state
 		persistCurrent();
 		render();
 		setTimeout(() => beginInlineRename(nf.id), 40);
@@ -1107,15 +1974,37 @@ document.addEventListener("DOMContentLoaded", async () => {
 		setTimeout(() => beginInlineRename(id), 30);
 	};
 
+	function collectDescendantIds(node, set = new Set()) {
+		set.add(node.id);
+		if (node.children) {
+			for (const child of node.children) collectDescendantIds(child, set);
+		}
+		return set;
+	}
+
 	window.deleteNode = function (id) {
 		const n = findNode(files, id);
 		if (!n) return;
-		showConfirmModal("Delete", `Delete "${n.name}"?`, (ok) => {
+		showConfirmModal("Delete", `Delete "${n.name}"?`, async (ok) => {
 			if (!ok) return;
+			const fullPath = getPath(id);
+			const pathParts = fullPath.slice(0, -1).map(x => x.name);
+			queueDiskDeletion(pathParts, n.name);
+
+			const deletedIds = collectDescendantIds(n);
+			if (deletedIds.has(selectedId)) {
+				clearTimeout(editorSaveTimer);
+				editorSaveTimer = null;
+			}
 			const p = findParent(files, id);
 			if (p) p.children = p.children.filter(c => c.id !== id);
 			else files = files.filter(c => c.id !== id);
-			if (selectedId === id) { selectedId = null; loadFile(); }
+
+			openTabs = openTabs.filter(tid => !deletedIds.has(tid));
+			if (deletedIds.has(selectedId)) {
+				selectedId = openTabs.length > 0 ? openTabs[openTabs.length - 1] : null;
+				await loadFile();
+			}
 			persistCurrent(); render(); syncWorkspace();
 		}, true);
 	};
@@ -1128,18 +2017,43 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const hasD = (ns, id) => ns.some(n => n.id === id || (n.children && hasD(n.children, id)));
 			if (hasD(src.children, tgtId)) return;
 		}
+
+		const oldName = src.name;
+		const oldFullPath = getPath(srcId);
+		const oldPathParts = oldFullPath.slice(0, -1).map(x => x.name);
+
 		const op = findParent(files, srcId);
 		if (op) op.children = op.children.filter(n => n.id !== srcId);
 		else files = files.filter(n => n.id !== srcId);
-		if (!tgtId) {
-			files.push(src);
-		} else {
+
+		let arr = files;
+		let tp = null;
+		if (tgtId) {
 			const tgt = findNode(files, tgtId);
-			const arr = tgt.type === "folder" ? tgt.children : (findParent(files, tgtId)?.children || files);
-			const tp = tgt.type === "folder" ? tgt : findParent(files, tgtId);
-			arr.push(src);
-			if (tp) tp.isOpen = true;
+			if (tgt) {
+				arr = tgt.type === "folder" ? tgt.children : (findParent(files, tgtId)?.children || files);
+				tp = tgt.type === "folder" ? tgt : findParent(files, tgtId);
+			}
 		}
+
+		if (nameExistsInArray(arr, src.name, src.id)) {
+			src.name = uniqueNodeName(arr, src.name, src.id);
+		}
+
+		arr.push(src);
+		if (tp) tp.isOpen = true;
+
+		const newFullPath = getPath(srcId);
+		const newPathParts = newFullPath.slice(0, -1).map(x => x.name);
+		if (oldPathParts.join("/") !== newPathParts.join("/") || oldName !== src.name) {
+			queueDiskDeletion(oldPathParts, oldName);
+			const clearDiskContent = (node) => {
+				delete node._diskContent;
+				if (node.children) node.children.forEach(clearDiskContent);
+			};
+			clearDiskContent(src);
+		}
+
 		persistCurrent(); render(); syncWorkspace();
 	};
 
@@ -1173,24 +2087,38 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const dot = n.name.lastIndexOf(".");
 		input.setSelectionRange(0, dot > 0 ? dot : n.name.length);
 
+		let isCancelled = false;
 		const commit = () => {
+			if (isCancelled) return;
 			inlineRenameId = null;
 			const newName = input.value.trim();
 			if (!newName || newName === n.name) { render(); return; }
+			if (newName === "." || newName === ".." || /[\\/:*?"<>|]/.test(newName)) {
+				showAlertModal("Invalid name", "Names cannot be '.' or '..' and cannot contain any of the following characters: \\ / : * ? \" < > |");
+				render();
+				return;
+			}
 			const p = findParent(files, id);
 			const arr = p ? p.children : files;
 			if (nameExistsInArray(arr, newName, id)) {
 				showAlertModal("Duplicate name", `"${newName}" already exists here.`);
 				render(); return;
 			}
+			const fullPath = getPath(id);
+			const pathParts = fullPath.slice(0, -1).map(x => x.name);
+			queueDiskDeletion(pathParts, n.name);
 			n.name = newName;
+			delete n._diskContent;
 			persistCurrent(); syncWorkspace(); render();
+			if (selectedId === id && n.type === "file") {
+				loadFile();
+			}
 		};
 
 		input.addEventListener("blur", commit);
 		input.addEventListener("keydown", (e) => {
 			if (e.key === "Enter") { e.preventDefault(); input.blur(); }
-			if (e.key === "Escape") { inlineRenameId = null; render(); }
+			if (e.key === "Escape") { isCancelled = true; inlineRenameId = null; render(); }
 		});
 	}
 
@@ -1198,12 +2126,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// EXPORT / IMPORT
 	// ============================================================
 	window.exportAll = async function () {
+		await autoSaveCurrentFile();
 		const zip = new JSZip();
 		addToZip(zip, files);
 		const blob = await zip.generateAsync({ type: "blob" });
 		downloadBlob(blob, `${sidebarWsName?.textContent || "export"}.zip`);
 	};
 	window.exportFolder = async function (id) {
+		await autoSaveCurrentFile();
 		const n = findNode(files, id);
 		if (!n || n.type !== "folder") return;
 		const zip = new JSZip();
@@ -1220,44 +2150,78 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function downloadBlob(blob, name) {
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement("a");
-		a.href = url; a.download = name; a.click();
-		setTimeout(() => URL.revokeObjectURL(url), 1000);
+		a.href = url;
+		a.download = name;
+		a.style.display = "none";
+		document.body.appendChild(a);
+		a.click();
+		setTimeout(() => {
+			if (a.parentNode) a.parentNode.removeChild(a);
+			URL.revokeObjectURL(url);
+		}, 1000);
 	}
 
-	window.handleImport = function (event) {
+	window.handleImport = async function (event) {
 		const file = event.target.files[0];
 		if (!file) return;
-		const reader = new FileReader();
-		reader.onload = async (e) => {
-			const zip = await JSZip.loadAsync(e.target.result);
+
+		try {
+			const buffer = await file.arrayBuffer();
+			const zip = await JSZip.loadAsync(buffer);
 			const folders = { "": files };
-			const promises = [];
+
+			const fileEntries = [];
 			zip.forEach((rel, entry) => {
 				if (entry.dir) return;
-				promises.push((async () => {
-					const content = await entry.async("string");
-					const parts = rel.split("/"), fname = parts.pop();
-					if (!fname) return;
-					let arr = files, cp = "";
-					for (const dir of parts) {
-						if (!dir) continue;
-						const fp = cp ? `${cp}/${dir}` : dir;
-						if (!folders[fp]) {
-							const nf = { id: uid("folder"), name: dir, type: "folder", isOpen: true, children: [] };
-							arr.push(nf); folders[fp] = nf.children;
-						}
-						arr = folders[fp]; cp = fp;
-					}
-					if (!nameExistsInArray(arr, fname))
-						arr.push({ id: uid("file"), name: fname, type: "file", content });
-				})());
+				const normalized = rel.replace(/\\/g, "/");
+				fileEntries.push({ path: normalized, entry });
 			});
-			await Promise.all(promises);
-			persistCurrent(); render(); syncWorkspace();
+
+			// Synchronously build folder hierarchy to prevent race conditions (ZIP-01, ZIP-02)
+			for (const { path } of fileEntries) {
+				const parts = path.split("/");
+				const fname = parts.pop();
+				if (!fname) continue;
+				let arr = files, curPath = "";
+				for (const dir of parts) {
+					if (!dir) continue;
+					const fp = curPath ? `${curPath}/${dir}` : dir;
+					if (!folders[fp]) {
+						let existingFolder = arr.find(n => n.type === "folder" && n.name === dir);
+						if (!existingFolder) {
+							existingFolder = { id: uid("folder"), name: dir, type: "folder", isOpen: true, children: [] };
+							arr.push(existingFolder);
+						}
+						folders[fp] = existingFolder.children;
+					}
+					arr = folders[fp];
+					curPath = fp;
+				}
+			}
+
+			// Asynchronously read all file contents
+			await Promise.all(fileEntries.map(async ({ path, entry }) => {
+				const content = await entry.async("string");
+				const parts = path.split("/");
+				const fname = parts.pop();
+				if (!fname) return;
+				const dirPath = parts.filter(Boolean).join("/");
+				const arr = folders[dirPath] || files;
+				if (!nameExistsInArray(arr, fname)) {
+					arr.push({ id: uid("file"), name: fname, type: "file", content });
+				}
+			}));
+
+			persistCurrent();
+			render();
+			syncWorkspace();
+			showAlertModal("Import complete", "Imported successfully.");
+		} catch (err) {
+			console.error("Failed to import ZIP:", err);
+			showAlertModal("Import Failed", "The selected file is not a valid ZIP archive: " + (err.message || err));
+		} finally {
 			event.target.value = "";
-			showAlertModal("Import complete", `Imported successfully.`);
-		};
-		reader.readAsArrayBuffer(file);
+		}
 	};
 
 	// ============================================================
@@ -1291,6 +2255,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	window.toggleWordWrap = function () {
 		isWordWrap = !isWordWrap;
 		applyWordWrapUI();
+		if (!isWordWrap) updateLineNumbers();
 		if (activeWsId) saveWsConfig(activeWsId);
 	};
 
@@ -1314,6 +2279,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	window.toggleTheme = function () {
 		theme = theme === "light" ? "dark" : "light";
+		localStorage.setItem("keeplocal_global_theme", theme);
 		applyConfig();
 		if (activeWsId) saveWsConfig(activeWsId);
 	};
@@ -1365,6 +2331,20 @@ document.addEventListener("DOMContentLoaded", async () => {
 			input.focus();
 		} else if (isHidden && input) {
 			input.value = "";
+			input.blur();
+			searchQuery = "";
+			render();
+		}
+	};
+
+	window.closeSearchBar = function () {
+		const wrapper = document.getElementById("searchBarWrapper");
+		const input = document.getElementById("searchInput");
+		if (!wrapper) return;
+		wrapper.classList.add("hidden");
+		if (input) {
+			input.value = "";
+			input.blur();
 			searchQuery = "";
 			render();
 		}
@@ -1375,22 +2355,57 @@ document.addEventListener("DOMContentLoaded", async () => {
 		render();
 	};
 
+	const searchInputEl = document.getElementById("searchInput");
+	if (searchInputEl) {
+		searchInputEl.addEventListener("keydown", (e) => {
+			if (e.key === "Escape") {
+				closeSearchBar();
+			}
+		});
+	}
+
 	// ============================================================
 	// EDITOR TABS (VS Code Style)
 	// ============================================================
-	window.openTab = function (id) {
+	window.openTab = async function (id) {
 		if (!id) return;
-		if (!openTabs.includes(id)) {
-			openTabs.push(id);
+		if (selectedId === id) {
+			if (!openTabs.includes(id)) {
+				openTabs.push(id);
+				renderTabs();
+			}
+			return;
 		}
-		selectedId = id;
-		persistCurrent();
-		renderTabs();
+		if (isOpenTabInProgress) return;
+		isOpenTabInProgress = true;
+		try {
+			if (selectedId) {
+				await autoSaveCurrentFile();
+			}
+			if (!openTabs.includes(id)) {
+				openTabs.push(id);
+			}
+			selectedId = id;
+			document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
+			const activeEl = fileTreeEl?.querySelector(`[data-id="${id}"]`);
+			if (activeEl) activeEl.classList.add("active");
+			persistCurrent();
+			renderTabs();
+			await loadFile();
+			updateBreadcrumbs();
+			if (window.innerWidth <= 768 && window.closeMobileSidebar) {
+				window.closeMobileSidebar();
+			}
+		} finally {
+			isOpenTabInProgress = false;
+		}
 	};
 
 	window.closeTab = async function (id, event) {
 		if (event) event.stopPropagation();
-		await autoSaveCurrentFile();
+		if (selectedId === id) {
+			await autoSaveCurrentFile();
+		}
 
 		const idx = openTabs.indexOf(id);
 		if (idx !== -1) {
@@ -1412,15 +2427,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	};
 
 	window.selectTab = async function (id) {
-		if (selectedId === id) return;
-		await autoSaveCurrentFile();
-		selectedId = id;
-		document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
-		const activeEl = fileTreeEl?.querySelector(`[data-id="${id}"]`);
-		if (activeEl) activeEl.classList.add("active");
-		persistCurrent();
-		renderTabs();
-		await loadFile();
+		await openTab(id);
 	};
 
 	function renderTabs() {
@@ -1485,13 +2492,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	function renderTree(nodes, container, depth) {
 		for (const node of nodes) {
-			let show = true, hasChild = false;
+			let show = true, hasChild = false, nameMatches = false;
 			if (searchQuery) {
-				if (node.type === "file")
+				if (node.type === "file") {
 					show = node.name.toLowerCase().includes(searchQuery) || (node.content?.toLowerCase().includes(searchQuery));
-				else {
+				} else {
+					nameMatches = node.name.toLowerCase().includes(searchQuery);
 					hasChild = checkMatchingChild(node, searchQuery);
-					show = hasChild;
+					show = nameMatches || hasChild;
 				}
 			}
 			if (!show) continue;
@@ -1531,18 +2539,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 			el.appendChild(acts);
 
 			// Click
-			el.onclick = (e) => {
+			el.onclick = async (e) => {
 				if (e.target.closest(".action-btn")) return;
 				if (node.type === "folder") {
+					if (selectedId && selectedId !== node.id) {
+						await autoSaveCurrentFile();
+					}
 					node.isOpen = !node.isOpen;
 					selectedId = node.id;
 					document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
 					el.classList.add("active");
 					persistCurrent();
 					// In-place DOM toggle without full tree re-render
-					const iconEl = el.querySelector(".icon i");
-					if (iconEl && window.lucide) {
-						iconEl.setAttribute("data-lucide", node.isOpen ? "folder-open" : "folder");
+					const iconWrap = el.querySelector(".icon");
+					if (iconWrap && window.lucide) {
+						iconWrap.innerHTML = `<i data-lucide="${node.isOpen ? 'folder-open' : 'folder'}" size="15"></i>`;
 						lucide.createIcons();
 					}
 					const childSubTree = el.nextElementSibling;
@@ -1553,12 +2564,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					}
 					updateBreadcrumbs();
 				} else {
-					openTab(node.id);
-					document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
-					el.classList.add("active");
-					persistCurrent();
-					loadFile();
-					updateBreadcrumbs();
+					await openTab(node.id);
 				}
 			};
 
@@ -1567,9 +2573,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 				e.preventDefault();
 				ctxNodeId = node.id;
 				ctxExport.style.display = node.type === "folder" ? "flex" : "none";
-				let top = e.pageY, left = e.pageX;
-				if (top + 110 > window.innerHeight) top = window.innerHeight - 110;
-				if (left + 170 > window.innerWidth) left = window.innerWidth - 170;
+				let top = e.clientY, left = e.clientX;
+				if (top + 120 > window.innerHeight) top = Math.max(8, window.innerHeight - 120);
+				if (left + 170 > window.innerWidth) left = Math.max(8, window.innerWidth - 170);
 				contextMenu.style.top = top + "px";
 				contextMenu.style.left = left + "px";
 				contextMenu.classList.remove("hidden");
@@ -1606,7 +2612,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		return folder.children.some(c =>
 			c.type === "file"
 				? c.name.toLowerCase().includes(q) || (c.content?.toLowerCase().includes(q))
-				: checkMatchingChild(c, q)
+				: (c.name.toLowerCase().includes(q) || checkMatchingChild(c, q))
 		);
 	}
 
@@ -1617,7 +2623,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const span = document.createElement("span");
 			span.className = "breadcrumb-item";
 			span.textContent = n.name;
-			span.onclick = () => { selectedId = n.id; if (n.type === "file") loadFile(); render(); };
+			span.onclick = async () => {
+				if (selectedId === n.id) return;
+				if (n.type === "file") {
+					await openTab(n.id);
+				} else {
+					if (selectedId) await autoSaveCurrentFile();
+					selectedId = n.id;
+					persistCurrent();
+					render();
+				}
+			};
 			breadcrumbEl.appendChild(span);
 		});
 	}
@@ -1625,48 +2641,178 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// EDITOR.JS MARKDOWN BRIDGE
 	// ============================================================
+	// EDITOR.JS MARKDOWN BRIDGE
+	// ============================================================
+	function sanitizeUrl(url) {
+		if (!url) return "#";
+		const trimmed = url.trim();
+		// Allow safe web schemes and relative anchors/paths
+		if (/^(?:(?:https?|mailto|tel):|\/|\.\/|\.\.\/|#)/i.test(trimmed)) {
+			return trimmed;
+		}
+		// Allow image data URIs
+		if (/^data:image\/(?:png|jpeg|jpg|gif|svg\+xml|webp);base64,[A-Za-z0-9+/=]+$/i.test(trimmed)) {
+			return trimmed;
+		}
+		return "#";
+	}
+
 	function textToBlocks(text) {
 		if (!text?.trim()) return [{ type: "paragraph", data: { text: "" } }];
 		const lines = text.split("\n");
 		const blocks = [];
-		let inCode = false, codeBuf = [], tableBuf = [];
+		let inCode = false, codeBuf = [], tableBuf = [], currentCodeLang = "";
+		let listStack = [];
 
-		const flushCode = () => { if (codeBuf.length) { blocks.push({ type: "code", data: { code: codeBuf.join("\n") } }); codeBuf = []; } };
+		const flushCode = () => {
+			if (codeBuf.length || inCode) {
+				blocks.push({
+					type: "code",
+					data: {
+						code: codeBuf.join("\n"),
+						language: currentCodeLang || ""
+					}
+				});
+				codeBuf = [];
+				currentCodeLang = "";
+			}
+		};
 		const flushTable = () => {
 			if (!tableBuf.length) return;
-			const content = tableBuf.map(r => r.split("|").slice(1, -1).map(c => c.trim())).filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c)));
-			if (content.length) blocks.push({ type: "table", data: { content, withHeadings: true } });
+			// Check if table contains a markdown header separator row, e.g. | --- | --- | (MD-04)
+			const hasHeaderSep = tableBuf.length > 1 && tableBuf[1].split("|").slice(1, -1).every(c => /^:?-+:?$/.test(c.trim()));
+			const content = tableBuf
+				.map(r => r.split("|").slice(1, -1).map(c => c.trim()))
+				.filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c)));
+			if (content.length) {
+				blocks.push({ type: "table", data: { content, withHeadings: hasHeaderSep } });
+			}
 			tableBuf = [];
 		};
 
 		for (const line of lines) {
-			if (line.trim().startsWith("```")) { inCode ? (inCode = false, flushCode()) : (flushTable(), inCode = true); continue; }
+			if (line.trim().startsWith("```")) {
+				listStack = [];
+				if (inCode) {
+					inCode = false;
+					flushCode();
+				} else {
+					flushTable();
+					inCode = true;
+					currentCodeLang = line.trim().slice(3).trim(); // MD-02
+				}
+				continue;
+			}
 			if (inCode) { codeBuf.push(line); continue; }
-			if (line.trim().startsWith("|") && line.trim().endsWith("|")) { tableBuf.push(line.trim()); continue; }
+			if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+				listStack = [];
+				tableBuf.push(line.trim());
+				continue;
+			}
 			flushTable();
 			const t = line.trim();
-			if (!t) { blocks.push({ type: "paragraph", data: { text: "" } }); continue; }
-			if (t.startsWith("#### ")) blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } });
-			else if (t.startsWith("### ")) blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } });
-			else if (t.startsWith("## ")) blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } });
-			else if (t.startsWith("# ")) blocks.push({ type: "header", data: { text: md2h(t.slice(2)), level: 1 } });
-			else if (t.startsWith("> ")) blocks.push({ type: "quote", data: { text: md2h(t.slice(2)), caption: "" } });
-			else if (/^- \[[ xX]\] /.test(t)) {
-				const checked = t[3].toLowerCase() === "x", text = md2h(t.slice(6)), last = blocks[blocks.length - 1];
+			if (!t) {
+				listStack = [];
+				blocks.push({ type: "paragraph", data: { text: "" } });
+				continue;
+			}
+
+			// Horizontal divider (delimiter): ---, ***, ___
+			if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(t)) {
+				listStack = [];
+				blocks.push({ type: "delimiter", data: {} });
+				continue;
+			}
+
+			// Standalone image: ![alt](url)
+			const imgMatch = t.match(/^!\[([^\]]*)\]\(((?:[^()]+|\([^()]*\)+))\)$/);
+			if (imgMatch) {
+				listStack = [];
+				blocks.push({
+					type: "image",
+					data: {
+						url: imgMatch[2],
+						caption: md2h(imgMatch[1])
+					}
+				});
+				continue;
+			}
+
+			// Headings H1 to H6
+			if (t.startsWith("###### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(7)), level: 6 } }); }
+			else if (t.startsWith("##### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(6)), level: 5 } }); }
+			else if (t.startsWith("#### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } }); }
+			else if (t.startsWith("### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } }); }
+			else if (t.startsWith("## ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } }); }
+			else if (t.startsWith("# ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(2)), level: 1 } }); }
+			// Alerts / Callouts: > [!NOTE] or > [!WARNING] or > [!TIP] etc.
+			else if (/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(t)) {
+				listStack = [];
+				const alertMatch = t.match(/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i);
+				const alertType = alertMatch[1].toUpperCase();
+				const alertTitle = alertMatch[2] ? md2h(alertMatch[2]) : (alertType.charAt(0) + alertType.slice(1).toLowerCase());
+				blocks.push({
+					type: "warning",
+					data: {
+						title: alertTitle,
+						message: ""
+					}
+				});
+			}
+			else if (t.startsWith("> ")) {
+				listStack = [];
+				const quoteText = md2h(t.slice(2));
+				const last = blocks[blocks.length - 1];
+				if (last?.type === "warning") {
+					last.data.message = last.data.message ? (last.data.message + "<br>" + quoteText) : quoteText;
+				} else if (last?.type === "quote") {
+					last.data.text = last.data.text ? (last.data.text + "<br>" + quoteText) : quoteText;
+				} else {
+					blocks.push({ type: "quote", data: { text: quoteText, caption: "" } });
+				}
+			}
+			else if (/^[ \t]*- \[[ xX]\] /.test(line)) {
+				listStack = [];
+				const checkMatch = line.match(/^[ \t]*- \[([ xX])\]\s*(.*)/);
+				const checked = checkMatch[1].toLowerCase() === "x";
+				const text = md2h(checkMatch[2]);
+				const last = blocks[blocks.length - 1];
 				if (last?.type === "checklist") last.data.items.push({ text, checked });
 				else blocks.push({ type: "checklist", data: { items: [{ text, checked }] } });
 			}
-			else if (t.startsWith("- ") || t.startsWith("* ")) {
-				const text = md2h(t.slice(2)), last = blocks[blocks.length - 1];
-				if (last?.type === "list") last.data.items.push({ content: text, items: [] });
-				else blocks.push({ type: "list", data: { style: "unordered", items: [{ content: text, items: [] }] } });
+			else {
+				// Check for unordered list (- or * or +) or ordered list (1. 2. etc.) (MD-03)
+				const ulMatch = line.match(/^([ \t]*)[-*+]\s+(.*)/);
+				const olMatch = line.match(/^([ \t]*)\d+\.\s+(.*)/);
+				if (ulMatch || olMatch) {
+					const isOrdered = !!olMatch;
+					const match = olMatch || ulMatch;
+					const rawIndent = match[1].replace(/\t/g, "  ").length;
+					const content = md2h(match[2]);
+					const style = isOrdered ? "ordered" : "unordered";
+
+					let lastBlock = blocks[blocks.length - 1];
+					if (!lastBlock || lastBlock.type !== "list") {
+						lastBlock = { type: "list", data: { style, items: [] } };
+						blocks.push(lastBlock);
+						listStack = [];
+					}
+
+					const newItem = { content, items: [] };
+					while (listStack.length > 0 && listStack[listStack.length - 1].indent >= rawIndent) {
+						listStack.pop();
+					}
+					if (listStack.length === 0) {
+						lastBlock.data.items.push(newItem);
+					} else {
+						listStack[listStack.length - 1].item.items.push(newItem);
+					}
+					listStack.push({ indent: rawIndent, item: newItem });
+				} else {
+					listStack = [];
+					blocks.push({ type: "paragraph", data: { text: md2h(line) } });
+				}
 			}
-			else if (/^\d+\. /.test(t)) {
-				const text = md2h(t.replace(/^\d+\. /, "")), last = blocks[blocks.length - 1];
-				if (last?.type === "list") last.data.items.push({ content: text, items: [] });
-				else blocks.push({ type: "list", data: { style: "ordered", items: [{ content: text, items: [] }] } });
-			}
-			else blocks.push({ type: "paragraph", data: { text: md2h(line) } });
 		}
 		flushCode(); flushTable();
 		return blocks.length ? blocks : [{ type: "paragraph", data: { text: "" } }];
@@ -1674,10 +2820,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	function md2h(s) {
 		if (!s) return "";
-		// Convert Markdown image links [![alt](img)](url) -> <a href="url"><img src="img" alt="alt"/></a>
-		let res = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%; border-radius:6px; margin:4px 0;" />');
+		// Escape raw HTML entities first to prevent raw HTML/script injection (MD-01)
+		let res = escHtml(s);
+		// Restore allowed safe tags: <u> and <mark>
+		res = res.replace(/&lt;u&gt;(.*?)&lt;\/u&gt;/gi, '<u class="cdx-underline">$1</u>');
+		res = res.replace(/&lt;mark(?: class="cdx-marker")?&gt;(.*?)&lt;\/mark&gt;/gi, '<mark class="cdx-marker">$1</mark>');
+		// Markdown highlight syntax: ==text== -> <mark class="cdx-marker">text</mark>
+		res = res.replace(/==([^=]+)==/g, '<mark class="cdx-marker">$1</mark>');
+		// Convert Markdown image links ![alt](url)
+		res = res.replace(/!\[([^\]]*)\]\(((?:[^()]+|\([^()]*\))+)\)/g, (match, alt, url) => {
+			const safeUrl = sanitizeUrl(url);
+			if (safeUrl === "#") return alt;
+			return `<img src="${safeUrl}" alt="${alt}" style="max-width:100%; border-radius:6px; margin:4px 0;" />`;
+		});
 		// Convert Markdown links [text](url) -> <a href="url" target="_blank" rel="noopener">text</a>
-		res = res.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+		res = res.replace(/\[([^\]]+)\]\(((?:[^()]+|\([^()]*\))+)\)/g, (match, text, url) => {
+			const safeUrl = sanitizeUrl(url);
+			if (safeUrl === "#") return `<a href="#" rel="noopener" onclick="return false;">${text}</a>`;
+			return `<a href="${safeUrl}" target="_blank" rel="noopener">${text}</a>`;
+		});
 		// Convert bold, italic, code
 		res = res.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/__(.*?)__/g, "<b>$1</b>")
 			.replace(/\*(.*?)\*/g, "<i>$1</i>").replace(/_(.*?)_/g, "<i>$1</i>")
@@ -1688,15 +2849,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function h2md(s) {
 		if (!s) return "";
 		return s
-			.replace(/<img[^>]*src="(.*?)"[^>]*alt="(.*?)"[^>]*>/gi, "![$2]($1)")
-			.replace(/<img[^>]*src="(.*?)"[^>]*>/gi, "![]($1)")
-			.replace(/<a [^>]*href="(.*?)"[^>]*>(.*?)<\/a>/gi, "[$2]($1)")
+			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*>/gi, "![$2]($1)")
+			.replace(/<img\s+[^>]*alt="([^"]*)"[^>]*src="([^"]*)"[^>]*>/gi, "![$1]($2)")
+			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*>/gi, "![]($1)")
+			.replace(/<a [^>]*href="(.*?)"[^>]*>(.*?)<\/a>/gi, (match, url, text) => {
+				if (url === "#") return text;
+				return `[${text}](${url})`;
+			})
+			.replace(/<mark[^>]*>(.*?)<\/mark>/gi, "==$1==")
+			.replace(/<u[^>]*>(.*?)<\/u>/gi, "%%%U_OPEN%%%$1%%%U_CLOSE%%%")
 			.replace(/<b>(.*?)<\/b>/gi, "**$1**").replace(/<strong>(.*?)<\/strong>/gi, "**$1**")
 			.replace(/<i>(.*?)<\/i>/gi, "*$1*").replace(/<em>(.*?)<\/em>/gi, "*$1*")
 			.replace(/<code[^>]*>(.*?)<\/code>/gi, "`$1`")
-			.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-			.replace(/<[^>]+>/g, "");
+			.replace(/<br\s*\/?>/gi, "\n")
+			.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+			.replace(/<[^>]+>/g, "")
+			.replace(/%%%U_OPEN%%%/g, "<u>").replace(/%%%U_CLOSE%%%/g, "</u>");
 	}
+
 	function blocksToText(data) {
 		if (!data?.blocks) return "";
 		const lines = [];
@@ -1704,6 +2874,37 @@ document.addEventListener("DOMContentLoaded", async () => {
 			switch (b.type) {
 				case "header": lines.push("#".repeat(b.data.level || 1) + " " + h2md(b.data.text)); break;
 				case "paragraph": lines.push(h2md(b.data.text)); break;
+				case "delimiter": lines.push("---"); break;
+				case "image": {
+					const cap = h2md(b.data.caption || "").trim();
+					lines.push(`![${cap}](${b.data.url || ""})`);
+					break;
+				}
+				case "warning": {
+					const title = h2md(b.data.title || "").trim();
+					const msg = h2md(b.data.message || "").trim();
+					if (title && title.toLowerCase() !== "note") {
+						lines.push(`> [!NOTE] ${title}`);
+					} else {
+						lines.push(`> [!NOTE]`);
+					}
+					if (msg) {
+						msg.split("\n").forEach(l => lines.push(`> ${l}`));
+					}
+					break;
+				}
+				case "quote": {
+					const qText = h2md(b.data.text || "");
+					if (qText) {
+						qText.split("\n").forEach(l => lines.push(`> ${l}`));
+					} else {
+						lines.push(">");
+					}
+					if (b.data.caption) {
+						lines.push(`> — ${h2md(b.data.caption)}`);
+					}
+					break;
+				}
 				case "list":
 					(function extractItems(items, depth = 0, style = b.data.style || "unordered") {
 						(items || []).forEach((it, i) => {
@@ -1718,19 +2919,38 @@ document.addEventListener("DOMContentLoaded", async () => {
 					})(b.data.items);
 					break;
 				case "checklist": (b.data.items || []).forEach(it => lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`)); break;
-				case "quote": lines.push(`> ${h2md(b.data.text)}`); break;
-				case "code": lines.push("```", b.data.code || "", "```"); break;
-				case "table": if (b.data.content?.length) { b.data.content.forEach((r, i) => { lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`); if (i === 0) lines.push(`| ${r.map(() => "---").join(" | ")} |`); }); } break;
+				case "code":
+					const lang = b.data?.language ? b.data.language.trim() : "";
+					lines.push(`\`\`\`${lang}`, b.data?.code || "", "```");
+					break;
+				case "table":
+					if (b.data.content?.length) {
+						const withHeadings = b.data.withHeadings !== false;
+						b.data.content.forEach((r, i) => {
+							lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`);
+							if (i === 0 && withHeadings) {
+								lines.push(`| ${r.map(() => "---").join(" | ")} |`);
+							}
+						});
+					}
+					break;
 				default: if (b.data?.text) { lines.push(h2md(b.data.text)); } break;
 			}
 		}
 		return lines.join("\n").trim();
 	}
 
+	window.textToBlocks = textToBlocks;
+	window.blocksToText = blocksToText;
+
 	// ============================================================
 	// EDITOR.JS
 	// ============================================================
 	window.switchEditorMode = async function (mode) {
+		const f = selectedId ? findNode(files, selectedId) : null;
+		const hasFile = !!(f && f.type === "file");
+		const isMarkdown = hasFile && isMarkdownFile(f?.name);
+		if (!isMarkdown) return;
 		if (editorMode === mode) return;
 		await autoSaveCurrentFile();
 		editorMode = mode;
@@ -1756,14 +2976,160 @@ document.addEventListener("DOMContentLoaded", async () => {
 		editorjsWrapper.appendChild(holder);
 
 		const tools = {};
-		tools.paragraph = { config: { preserveBlank: true }, inlineToolbar: true }; // ← NEW
-		if (typeof Header !== "undefined") tools.header = { class: Header };
+		tools.paragraph = { config: { preserveBlank: true }, inlineToolbar: true };
+		if (typeof Header !== "undefined") {
+			tools.header = {
+				class: Header,
+				config: {
+					placeholder: "Heading",
+					levels: [1, 2, 3, 4, 5, 6],
+					defaultLevel: 2
+				},
+				inlineToolbar: true
+			};
+		}
 		const ListTool = typeof NestedList !== "undefined" ? NestedList : (typeof List !== "undefined" ? List : null);
 		if (ListTool) tools.list = { class: ListTool, inlineToolbar: true };
 		if (typeof Checklist !== "undefined") tools.checklist = { class: Checklist, inlineToolbar: true };
-		if (typeof Quote !== "undefined") tools.quote = { class: Quote, inlineToolbar: true };
-		if (typeof CodeTool !== "undefined") tools.code = { class: CodeTool };
+		if (typeof Quote !== "undefined") {
+			class CustomQuoteTool extends Quote {
+				render() {
+					const container = super.render();
+					const textEl = container.querySelector(`.${this.css.text}`);
+					const captionEl = container.querySelector(`.${this.css.caption}`);
+
+					const handleKeydown = (e) => {
+						if (e.key === "Enter" && !e.shiftKey) {
+							e.preventDefault();
+							document.execCommand("insertLineBreak");
+							return;
+						}
+						if (e.key === "Backspace") {
+							const targetEl = e.currentTarget;
+							const sel = window.getSelection();
+							if (!sel || !sel.rangeCount) return;
+							const range = sel.getRangeAt(0);
+							try {
+								const preRange = document.createRange();
+								preRange.setStart(targetEl, 0);
+								preRange.setEnd(range.startContainer, range.startOffset);
+								const preText = preRange.toString();
+								if (preText.length > 0 || (range.startContainer !== targetEl && targetEl.firstChild && range.startContainer !== targetEl.firstChild)) {
+									e.stopPropagation();
+								}
+							} catch (_) { }
+						}
+					};
+
+					textEl?.addEventListener("keydown", handleKeydown, true);
+					captionEl?.addEventListener("keydown", handleKeydown, true);
+					return container;
+				}
+			}
+			tools.quote = { class: CustomQuoteTool, inlineToolbar: true };
+		}
+		if (typeof Warning !== "undefined") {
+			class CustomWarningTool extends Warning {
+				static get toolbox() {
+					return {
+						icon: Warning.toolbox.icon,
+						title: "Callout"
+					};
+				}
+			}
+			tools.warning = {
+				class: CustomWarningTool,
+				inlineToolbar: true,
+				config: {
+					titlePlaceholder: "Title",
+					messagePlaceholder: "Message"
+				}
+			};
+		}
+		if (typeof Delimiter !== "undefined") {
+			class CustomDelimiterTool extends Delimiter {
+				static get toolbox() {
+					return {
+						icon: Delimiter.toolbox.icon,
+						title: "Divider"
+					};
+				}
+			}
+			tools.delimiter = { class: CustomDelimiterTool };
+		}
+		if (typeof SimpleImage !== "undefined") {
+			class CustomImageTool extends SimpleImage {
+				static get toolbox() {
+					return {
+						icon: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+						title: "Image"
+					};
+				}
+				render() {
+					const container = super.render();
+					if (!this.data.url) {
+						const urlInput = document.createElement("input");
+						urlInput.className = "cdx-input ce-image-url-input";
+						urlInput.placeholder = "Paste image URL and press Enter…";
+						urlInput.style.cssText = "margin-bottom: 8px;";
+						urlInput.addEventListener("keydown", (e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								const val = urlInput.value.trim();
+								if (val) {
+									this.data = { url: val, caption: this.data.caption || "" };
+									urlInput.remove();
+								}
+							}
+						});
+						container.prepend(urlInput);
+					}
+					return container;
+				}
+			}
+			tools.image = { class: CustomImageTool, inlineToolbar: true };
+		}
+		if (typeof CodeTool !== "undefined") {
+			class CustomCodeTool extends CodeTool {
+				constructor({ data, config, api, readOnly }) {
+					super({ data, config, api, readOnly });
+					this._language = data && data.language ? data.language : "";
+				}
+				render() {
+					const container = document.createElement("div");
+					container.className = "ce-code-wrapper";
+					const textarea = super.render();
+
+					const langInput = document.createElement("input");
+					langInput.className = "ce-code__lang-input";
+					langInput.placeholder = "Language (e.g. js, python)";
+					langInput.value = this._language || "";
+					langInput.spellcheck = false;
+					langInput.addEventListener("input", (e) => {
+						this._language = e.target.value.trim();
+					});
+
+					container.appendChild(langInput);
+					container.appendChild(textarea);
+					return container;
+				}
+				save(blockContent) {
+					const res = super.save(blockContent);
+					const langInput = blockContent.querySelector(".ce-code__lang-input");
+					if (langInput) {
+						this._language = langInput.value.trim();
+					}
+					if (this._language) {
+						res.language = this._language;
+					}
+					return res;
+				}
+			}
+			tools.code = { class: CustomCodeTool };
+		}
 		if (typeof InlineCode !== "undefined") tools.inlineCode = { class: InlineCode };
+		if (typeof Marker !== "undefined") tools.marker = { class: Marker };
+		if (typeof Underline !== "undefined") tools.underline = { class: Underline };
 		if (typeof Table !== "undefined") tools.table = { class: Table, inlineToolbar: true, config: { rows: 2, cols: 2 } };
 
 		editorInstance = new EditorJS({
@@ -1775,32 +3141,36 @@ document.addEventListener("DOMContentLoaded", async () => {
 			onChange: async () => {
 				if (isInitEditor) return;
 				clearTimeout(editorSaveTimer);
+				const editingId = editorLoadedFileId || selectedId;
 				editorSaveTimer = setTimeout(async () => {
-					const f = findNode(files, selectedId);
+					if (!editingId || (selectedId !== editingId && editorLoadedFileId !== editingId)) return;
+					const f = findNode(files, editingId);
 					if (f?.type === "file" && editorInstance) {
 						try {
 							const d = await editorInstance.save();
+							if (selectedId !== editingId && editorLoadedFileId !== editingId) return;
 							f.content = blocksToText(d);
-							editorTextarea.value = f.content;
+							if (editorTextarea) editorTextarea.value = f.content;
 							persistCurrent();
-							syncWorkspace();
+							syncWorkspace(false);
 						} catch (_) { }
 					}
 				}, 400);
 			}
 		});
+		window.editorInstance = editorInstance;
 	}
 
 	async function loadFile() {
 		let file = findNode(files, selectedId);
-		if (!file) {
-			const fb = findFirstFile(files);
-			if (fb) { selectedId = fb.id; file = fb; }
+		if (!file || file.type !== "file") {
+			file = null;
 		}
 
+		editorLoadedFileId = null;
 		isInitEditor = true;
 
-		if (file?.type === "file") {
+		if (file) {
 			const text = file.content || "";
 			editorTextarea.value = text;
 			editorTextarea.disabled = false;
@@ -1808,17 +3178,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			const codeEl = document.getElementById("codeHighlightContent");
 			if (codeEl) codeEl.innerHTML = ""; // prevent stale highlight flash
-			const ext = file.name.split(".").pop()?.toLowerCase();
-			const isMarkdown = ext === "md" || ext === "markdown" || ext === "txt" || !ext;
+			const isMarkdown = isMarkdownFile(file.name);
+
+			if (modeSwitchGroup) {
+				if (isMarkdown) {
+					modeSwitchGroup.classList.remove("hidden");
+				} else {
+					modeSwitchGroup.classList.add("hidden");
+				}
+			}
 
 			if (!isMarkdown) {
-				// Code files (.html, .json, .js, .css, .py, etc.) must open in Raw mode to protect code structure
-				editorMode = "plain";
-				updateEditorModeUI();
+				// Code / non-markdown files must open in Raw mode to protect code structure
 				if (modeBlockBtn) modeBlockBtn.disabled = true;
 			} else {
 				if (modeBlockBtn) modeBlockBtn.disabled = false;
 			}
+			if (modePlainBtn) modePlainBtn.disabled = false;
+
+			if (editorEmptyState) editorEmptyState.classList.add("hidden");
 
 			if (editorMode === "block" && isMarkdown) {
 				editorjsWrapper.classList.remove("hidden");
@@ -1828,12 +3206,23 @@ document.addEventListener("DOMContentLoaded", async () => {
 				plainWrapper.classList.remove("hidden");
 				editorjsWrapper.classList.add("hidden");
 			}
+			editorLoadedFileId = file.id;
+			if (editorStatusSpan) editorStatusSpan.textContent = (editorMode === "block" && isMarkdown) ? "Block Mode" : "Raw Text";
 		} else {
-			const hasF = !!findFirstFile(files);
+			if (editorEmptyState) {
+				editorEmptyState.classList.remove("hidden");
+				if (window.lucide) lucide.createIcons();
+			}
+			editorjsWrapper?.classList.add("hidden");
+			plainWrapper?.classList.add("hidden");
+			if (modeSwitchGroup) modeSwitchGroup.classList.add("hidden");
+			if (modeBlockBtn) modeBlockBtn.disabled = true;
+			if (modePlainBtn) modePlainBtn.disabled = true;
 			editorTextarea.value = "";
-			editorTextarea.disabled = hasF;
-			editorTextarea.placeholder = hasF ? "Select a file to edit" : "Create a file to start writing…";
-			if (editorMode === "block") await initOrUpdateEditorJs("");
+			editorTextarea.disabled = true;
+			editorLoadedFileId = null;
+			if (editorStatusSpan) editorStatusSpan.textContent = "No file open";
+			if (cursorPosSpan) cursorPosSpan.textContent = "—";
 		}
 
 		isInitEditor = false;
@@ -2004,69 +3393,194 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	function updateLineNumbers() {
 		if (!lineNumbersEl) return;
+		const file = findNode(files, selectedId);
+		if (!file || file.type !== "file") {
+			lineNumbersEl.textContent = "";
+			return;
+		}
 		const count = editorTextarea.value.split("\n").length;
 		const nums = [];
 		for (let i = 1; i <= count; i++) nums.push(i);
 		lineNumbersEl.textContent = nums.join("\n");
 	}
 	function updateCursor() {
+		const file = findNode(files, selectedId);
+		if (!file || file.type !== "file") {
+			if (cursorPosSpan) cursorPosSpan.textContent = "—";
+			return;
+		}
 		const before = editorTextarea.value.substring(0, editorTextarea.selectionStart);
 		const lines = before.split("\n");
 		cursorPosSpan.textContent = `Ln ${lines.length}, Col ${lines[lines.length - 1].length + 1}`;
 	}
 
 	editorTextarea.addEventListener("input", async () => {
-		const f = findNode(files, selectedId);
-		if (f?.type === "file") { f.content = editorTextarea.value; persistCurrent(); syncWorkspace(); }
+		const targetId = (findNode(files, selectedId)?.type === "file") ? selectedId : editorLoadedFileId;
+		const f = findNode(files, targetId);
+		if (f?.type === "file") {
+			f.content = editorTextarea.value;
+			persistCurrent();
+			syncWorkspace(false);
+		}
 		updateLineNumbers();
 		updateCodeHighlighting();
 	});
 	editorTextarea.addEventListener("keydown", (e) => {
 		if (e.key === "Tab") {
 			e.preventDefault();
-			const s = editorTextarea.selectionStart, end = editorTextarea.selectionEnd;
-			editorTextarea.value = editorTextarea.value.substring(0, s) + "    " + editorTextarea.value.substring(end);
-			editorTextarea.selectionStart = editorTextarea.selectionEnd = s + 4;
-			editorTextarea.dispatchEvent(new Event("input"));
+			const val = editorTextarea.value;
+			const start = editorTextarea.selectionStart;
+			const end = editorTextarea.selectionEnd;
+
+			if (e.shiftKey) {
+				// Shift+Tab: Unindent (single or multi-line)
+				const lineStart = val.lastIndexOf("\n", start - 1) + 1;
+				let lineEnd = val.indexOf("\n", end);
+				if (lineEnd === -1) lineEnd = val.length;
+
+				const lines = val.substring(lineStart, lineEnd).split("\n");
+				let firstLineRemoved = 0;
+				let totalRemoved = 0;
+
+				const unindented = lines.map((line, idx) => {
+					let removeCount = 0;
+					if (line.startsWith("    ")) {
+						removeCount = 4;
+					} else if (line.startsWith("\t")) {
+						removeCount = 1;
+					} else {
+						const match = line.match(/^ {1,3}/);
+						if (match) removeCount = match[0].length;
+					}
+					if (idx === 0) firstLineRemoved = removeCount;
+					totalRemoved += removeCount;
+					return line.slice(removeCount);
+				});
+
+				editorTextarea.value = val.substring(0, lineStart) + unindented.join("\n") + val.substring(lineEnd);
+				editorTextarea.selectionStart = Math.max(lineStart, start - firstLineRemoved);
+				editorTextarea.selectionEnd = Math.max(lineStart, end - totalRemoved);
+				editorTextarea.dispatchEvent(new Event("input"));
+			} else {
+				// Tab: Indent
+				if (start !== end && val.substring(start, end).includes("\n")) {
+					// Multi-line selection: indent each line by prepending 4 spaces
+					const lineStart = val.lastIndexOf("\n", start - 1) + 1;
+					let lineEnd = val.indexOf("\n", end);
+					if (lineEnd === -1) lineEnd = val.length;
+
+					const lines = val.substring(lineStart, lineEnd).split("\n");
+					const indented = lines.map(line => "    " + line);
+					const addedTotal = 4 * lines.length;
+
+					editorTextarea.value = val.substring(0, lineStart) + indented.join("\n") + val.substring(lineEnd);
+					editorTextarea.selectionStart = start + 4;
+					editorTextarea.selectionEnd = end + addedTotal;
+					editorTextarea.dispatchEvent(new Event("input"));
+				} else {
+					// Single line / caret: insert 4 spaces
+					editorTextarea.value = val.substring(0, start) + "    " + val.substring(end);
+					editorTextarea.selectionStart = editorTextarea.selectionEnd = start + 4;
+					editorTextarea.dispatchEvent(new Event("input"));
+				}
+			}
 		}
 	});
 	editorTextarea.addEventListener("keyup", updateCursor);
 	editorTextarea.addEventListener("click", updateCursor);
 	editorTextarea.addEventListener("focus", updateCursor);
-	editorTextarea.addEventListener("scroll", () => { if (lineNumbersEl) lineNumbersEl.scrollTop = editorTextarea.scrollTop; });
 
-	// Ctrl+Wheel → editor font size only
+	// Ctrl/Cmd+Wheel → editor font size only
 	document.querySelector(".main")?.addEventListener("wheel", (e) => {
-		if (e.ctrlKey) { e.preventDefault(); changeFontSize(e.deltaY < 0 ? 1 : -1); }
+		if (e.ctrlKey || e.metaKey) { e.preventDefault(); changeFontSize(e.deltaY < 0 ? 1 : -1); }
 	}, { passive: false });
 
 	// ============================================================
 	// KEYBOARD SHORTCUTS
 	// ============================================================
 	document.addEventListener("keydown", async (e) => {
-		if (e.ctrlKey && e.key === "s") {
+		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
 			e.preventDefault();
 			if (!activeWsId) return;
 			if (workspaceHandle) {
 				await autoSaveCurrentFile();
 				persistCurrent();
-				await syncWorkspace();
-				const prev = wsStatusBadge.textContent;
-				wsStatusBadge.textContent = "Saved ✓";
-				setTimeout(() => { wsStatusBadge.textContent = workspaceHandle.name; }, 1500);
+				if (!fsPermissionGranted) {
+					await requestReauthorization();
+				} else {
+					await syncWorkspace(true);
+					const prev = wsStatusBadge.textContent;
+					wsStatusBadge.textContent = "Saved ✓";
+					setTimeout(() => {
+						if (workspaceHandle && fsPermissionGranted) wsStatusBadge.textContent = workspaceHandle.name;
+					}, 1500);
+				}
 			} else {
 				saveWorkspace();
 			}
 		}
-		if (e.ctrlKey && e.key === "n" && activeWsId) {
-			e.preventDefault(); addFile();
+		// New note shortcut: Alt+N (or Option+N) / Ctrl+N / Cmd+N
+		if ((e.altKey || e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "n" || e.code === "KeyN") && !e.shiftKey && activeWsId) {
+			e.preventDefault();
+			addFile();
+		}
+
+		// Close note shortcut: Alt+W (or Option+W)
+		if (e.altKey && (e.key.toLowerCase() === "w" || e.code === "KeyW") && activeWsId) {
+			e.preventDefault();
+			const targetId = (selectedId && findNode(files, selectedId)?.type === "file")
+				? selectedId
+				: (openTabs.length > 0 ? openTabs[openTabs.length - 1] : null);
+			if (targetId) {
+				closeTab(targetId);
+			}
 		}
 	});
 
 	document.addEventListener("keydown", (e) => {
-		if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "l") {
+		if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "l") {
 			e.preventDefault();
 			toggleTheme();
+		}
+	});
+
+	// Helper to check if element is an input, textarea, or contenteditable editor
+	function isEditableTarget(el) {
+		if (!el) return false;
+		const tag = el.tagName;
+		return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable || (el.closest && !!el.closest('[contenteditable="true"]'));
+	}
+
+	// Help shortcuts: '?' toggles help when not typing in editor, F1 or Alt+H toggles anytime
+	document.addEventListener("keydown", (e) => {
+		// F1 or Alt+H (or Option+H) toggles help from anywhere
+		if (e.key === "F1" || (e.altKey && (e.key.toLowerCase() === "h" || e.code === "KeyH"))) {
+			e.preventDefault();
+			toggleHelpModal();
+			return;
+		}
+
+		// Ctrl/Cmd + Shift + ? (or Ctrl/Cmd + ?) toggles help
+		if ((e.ctrlKey || e.metaKey) && (e.key === "?" || (e.shiftKey && (e.key === "/" || e.code === "Slash")))) {
+			e.preventDefault();
+			toggleHelpModal();
+			return;
+		}
+
+		// '?' shortcut toggles help when not typing in an editable field
+		if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+			if (helpModalOverlay?.classList.contains("active")) {
+				e.preventDefault();
+				hideHelpModal();
+				return;
+			}
+			// Do not open if another prompt modal is open
+			if (modalOverlay?.classList.contains("active")) return;
+
+			if (!isEditableTarget(document.activeElement) && !isEditableTarget(e.target)) {
+				e.preventDefault();
+				toggleHelpModal();
+			}
 		}
 	});
 
@@ -2085,7 +3599,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 	});
 	document.addEventListener("mousemove", (e) => {
 		if (!isResizing) return;
-		sidebar.style.width = Math.max(180, Math.min(600, startWidth + (e.clientX - startX))) + "px";
+		const newWidth = Math.max(180, Math.min(600, startWidth + (e.clientX - startX)));
+		document.documentElement.style.setProperty("--sidebar-width", newWidth + "px");
+		sidebar.style.width = "";
 	});
 	document.addEventListener("mouseup", () => {
 		if (!isResizing) return;
@@ -2096,13 +3612,79 @@ document.addEventListener("DOMContentLoaded", async () => {
 	});
 
 	// ============================================================
+	// MOBILE SIDEBAR (A11Y-01)
+	// ============================================================
+	window.toggleMobileSidebar = function (force) {
+		const sb = document.querySelector(".sidebar");
+		const backdrop = document.getElementById("sidebarBackdrop");
+		if (!sb) return;
+		const isOpen = sb.classList.contains("mobile-open");
+		const shouldOpen = typeof force === "boolean" ? force : !isOpen;
+		if (shouldOpen) {
+			sb.classList.add("mobile-open");
+			if (backdrop) {
+				backdrop.classList.remove("hidden");
+				requestAnimationFrame(() => backdrop.classList.add("active"));
+			}
+		} else {
+			sb.classList.remove("mobile-open");
+			if (backdrop) {
+				backdrop.classList.remove("active");
+				setTimeout(() => {
+					if (!sb.classList.contains("mobile-open")) {
+						backdrop.classList.add("hidden");
+					}
+				}, 250);
+			}
+		}
+	};
+
+	window.closeMobileSidebar = function () {
+		window.toggleMobileSidebar(false);
+	};
+
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape") {
+			const sb = document.querySelector(".sidebar");
+			if (sb?.classList.contains("mobile-open")) {
+				window.closeMobileSidebar();
+			}
+		}
+	});
+
+	// ============================================================
 	// FILE TREE DRAG DROP
 	// ============================================================
-	fileTreeEl.addEventListener("click", (e) => {
-		if (e.target === fileTreeEl) { selectedId = null; render(); persistCurrent(); loadFile(); }
+	fileTreeEl.addEventListener("click", async (e) => {
+		if (e.target === fileTreeEl) {
+			if (openTabs.length === 0 && selectedId) {
+				await autoSaveCurrentFile();
+				selectedId = null;
+				render();
+				persistCurrent();
+				await loadFile();
+			}
+		}
 	});
 	fileTreeEl.ondragover = (e) => e.preventDefault();
 	fileTreeEl.ondrop = () => { if (draggedId) moveNode(draggedId, null); };
+
+	// ============================================================
+	// BEFOREUNLOAD FLUSH
+	// ============================================================
+	window.addEventListener("beforeunload", () => {
+		const targetId = (findNode(files, selectedId)?.type === "file") ? selectedId : editorLoadedFileId;
+		if (targetId && editorTextarea) {
+			const f = findNode(files, targetId);
+			if (f?.type === "file") {
+				const isMarkdown = isMarkdownFile(f.name);
+				if (editorMode === "plain" || !isMarkdown) {
+					f.content = editorTextarea.value;
+					persistCurrent();
+				}
+			}
+		}
+	});
 
 	// ============================================================
 	// INIT
@@ -2120,10 +3702,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 			id: wsId, name: "My Notes", createdAt: Date.now(),
 			lastOpenedAt: Date.now(), folderName: null, fileCount: countAllFiles(migFiles)
 		});
-		localStorage.setItem(`keeplocal_files_${wsId}`, oldFiles);
-		if (oldCfg) localStorage.setItem(`keeplocal_cfg_${wsId}`, oldCfg);
-		localStorage.removeItem("keeplocal_files");
-		localStorage.removeItem("keeplocal_config");
+		try {
+			localStorage.setItem(`keeplocal_files_${wsId}`, oldFiles);
+			if (oldCfg) localStorage.setItem(`keeplocal_cfg_${wsId}`, oldCfg);
+		} catch (e) {
+			handleStorageError(e, "migration");
+		}
+		try {
+			localStorage.removeItem("keeplocal_files");
+			localStorage.removeItem("keeplocal_config");
+		} catch (_) { }
 		saveWorkspaceMeta();
 	}
 
@@ -2144,4 +3732,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 	} else {
 		showWelcome();
 	}
+
+	// First time visit: show product onboarding & help modal
+	const hasSeenHelp = localStorage.getItem("keeplocal_help_seen");
+	if (!hasSeenHelp) {
+		localStorage.setItem("keeplocal_help_seen", "true");
+		setTimeout(() => {
+			openHelpModal();
+		}, 200);
+	}
 });
+
+// ============================================================
+// SERVICE WORKER REGISTRATION (ARCH-01)
+// ============================================================
+if ("serviceWorker" in navigator && (window.location.protocol === "http:" || window.location.protocol === "https:")) {
+	window.addEventListener("load", () => {
+		navigator.serviceWorker.register("./sw.js").catch((err) => {
+			console.warn("[KeepLocal] Service Worker registration failed:", err);
+		});
+	});
+}
+

@@ -14,16 +14,21 @@
         href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;1,14..32,400&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="css/styles.css" />
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lucide@1.48.0/dist/umd/lucide.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@editorjs/editorjs@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@editorjs/header@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@editorjs/nested-list@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@editorjs/checklist@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@editorjs/quote@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@editorjs/code@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@editorjs/inline-code@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@editorjs/table@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/editorjs@2.31.7"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/header@2.8.9"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/nested-list@1.4.3"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/checklist@1.6.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/quote@2.7.6"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/warning@1.4.1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/delimiter@1.4.2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/simple-image@1.6.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/code@2.9.4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/inline-code@1.5.2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/marker@1.4.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/underline@1.2.1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@editorjs/table@2.4.6"></script>
     <!-- Prism.js Syntax Highlighting -->
     <link id="prismTheme" rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
@@ -80,11 +85,15 @@
             <div class="welcome-tips">
                 <div class="welcome-tip">
                     <i data-lucide="zap" size="13"></i>
-                    <span><b>Ctrl+S</b> syncs to connected folder</span>
+                    <span><b>Ctrl/Cmd+S</b> syncs to connected folder</span>
                 </div>
                 <div class="welcome-tip">
                     <i data-lucide="zap" size="13"></i>
-                    <span><b>Ctrl+N</b> creates a new file</span>
+                    <span><b>Alt+N</b> creates a new note</span>
+                </div>
+                <div class="welcome-tip">
+                    <i data-lucide="zap" size="13"></i>
+                    <span><b>Alt+W</b> closes active note</span>
                 </div>
                 <div class="welcome-tip">
                     <i data-lucide="zap" size="13"></i>
@@ -92,7 +101,11 @@
                 </div>
                 <div class="welcome-tip">
                     <i data-lucide="zap" size="13"></i>
-                    <span><b>Ctrl+Shift+L</b> toggles theme</span>
+                    <span><b>Ctrl/Cmd+Shift+L</b> toggles theme</span>
+                </div>
+                <div class="welcome-tip welcome-tip-help" onclick="toggleHelpModal()" title="Open Product Guide & Shortcuts (?)">
+                    <i data-lucide="help-circle" size="13"></i>
+                    <span>Press <b>?</b> or <b>Alt+H</b> for product guide</span>
                 </div>
             </div>
 
@@ -113,6 +126,10 @@
                 </button>
                 <input id="wsCardSearchInput" class="ws-card-search-input hidden" placeholder="Search workspaces..."
                     oninput="filterWorkspaceCards()" />
+                <button class="ws-card-search-btn" id="welcomeHelpBtn" onclick="toggleHelpModal()"
+                    title="Product Guide & Shortcuts (?)">
+                    <i data-lucide="help-circle" size="15"></i>
+                </button>
             </div>
 
             <div id="workspacesList" class="workspaces-list">
@@ -131,20 +148,27 @@
      EDITOR APP
 ════════════════════════════════════════════════════════ -->
     <div id="appShell" class="app hidden">
+        <div id="sidebarBackdrop" class="sidebar-backdrop hidden" onclick="closeMobileSidebar()"></div>
 
         <!-- Sidebar -->
         <div class="sidebar">
             <!-- Sidebar Header / Workspace Switcher -->
             <div class="sidebar-header" style="position: relative;">
-                <button class="ws-switcher-btn" id="wsSwitcherBtn" onclick="toggleWsDropdown(event)"
-                    title="Switch Workspace">
-                    <img src="assets/keeplocal.png" alt="KeepLocal" class="sidebar-logo-img">
-                    <div class="ws-name-wrap">
-                        <span class="sidebar-ws-name" id="sidebarWsName">Workspace</span>
-                        <span class="sidebar-ws-folder" id="sidebarWsFolder">Local Storage</span>
-                    </div>
-                    <i data-lucide="chevrons-up-down" size="14" class="ws-switch-icon"></i>
-                </button>
+                <div class="sidebar-header-row">
+                    <button class="ws-switcher-btn" id="wsSwitcherBtn" onclick="toggleWsDropdown(event)"
+                        title="Switch Workspace">
+                        <img src="assets/keeplocal.png" alt="KeepLocal" class="sidebar-logo-img">
+                        <div class="ws-name-wrap">
+                            <span class="sidebar-ws-name" id="sidebarWsName">Workspace</span>
+                            <span class="sidebar-ws-folder" id="sidebarWsFolder">Local Storage</span>
+                        </div>
+                        <i data-lucide="chevrons-up-down" size="14" class="ws-switch-icon"></i>
+                    </button>
+                    <button id="mobileSidebarCloseBtn" class="mobile-sidebar-close-btn" onclick="closeMobileSidebar()"
+                        title="Close Sidebar" aria-label="Close Sidebar">
+                        <i data-lucide="x" size="16"></i>
+                    </button>
+                </div>
 
                 <!-- Workspace Switcher Dropdown Menu (GitHub style) -->
                 <div id="wsDropdown" class="ws-dropdown hidden">
@@ -183,7 +207,7 @@
                         <button class="icon-btn" onclick="toggleSearchBar()" title="Search Files">
                             <i data-lucide="search" size="11"></i>
                         </button>
-                        <button class="icon-btn" onclick="addFile()" title="New File (Ctrl+N)">
+                        <button class="icon-btn" onclick="addFile()" title="New File (Alt+N)">
                             <i data-lucide="file-plus" size="11"></i>
                         </button>
                         <button class="icon-btn" onclick="addFolder()" title="New Folder">
@@ -215,6 +239,13 @@
 
             <!-- Footer -->
             <div class="workspace-footer">
+                <div id="storageQuotaBanner" class="storage-quota-banner hidden">
+                    <div class="storage-quota-text-wrap">
+                        <i data-lucide="alert-triangle" size="13"></i>
+                        <span id="storageQuotaText">Storage 85% full</span>
+                    </div>
+                    <button class="storage-quota-btn" onclick="saveWorkspace()">Connect</button>
+                </div>
                 <button id="saveWorkspaceBtn" class="save-workspace-btn" onclick="saveWorkspace()">
                     <i data-lucide="hard-drive" size="14"></i>
                     <span>Connect Folder</span>
@@ -238,9 +269,13 @@
             </div>
 
             <div class="topbar">
+                <button id="mobileSidebarToggle" class="mobile-sidebar-toggle" onclick="toggleMobileSidebar()"
+                    title="Toggle Sidebar" aria-label="Toggle Sidebar">
+                    <i data-lucide="menu" size="16"></i>
+                </button>
                 <div id="breadcrumb"></div>
                 <div class="controls">
-                    <div class="mode-switch-group">
+                    <div id="modeSwitchGroup" class="mode-switch-group hidden">
                         <button id="modeBlockBtn" class="mode-btn active" onclick="switchEditorMode('block')"
                             title="Block Editor">
                             <i data-lucide="layout" size="14"></i> Block
@@ -262,10 +297,20 @@
                     <button id="themeToggle" class="control-btn" onclick="toggleTheme()" title="Toggle Theme">
                         <i data-lucide="sun" size="15"></i>
                     </button>
+                    <button id="helpToggle" class="control-btn" onclick="toggleHelpModal()" title="Help & Shortcuts (? / Alt+H)">
+                        <i data-lucide="help-circle" size="15"></i>
+                    </button>
                 </div>
             </div>
 
             <div class="editor-container">
+                <div id="editorEmptyState" class="editor-empty-state hidden">
+                    <div class="empty-state-icon">
+                        <i data-lucide="file-text" size="48"></i>
+                    </div>
+                    <p>No open note</p>
+                    <small>Select a note from the explorer, press <b>Alt+N</b>, or <a href="javascript:void(0)" onclick="addFile()" class="empty-state-link">create a new note</a></small>
+                </div>
                 <div id="editorjs" class="editorjs-wrapper"></div>
                 <div id="plainEditorWrapper" class="plain-editor-wrapper hidden">
                     <div id="lineNumbers" class="line-numbers"></div>
@@ -280,13 +325,16 @@
                 <span id="editorStatus" class="status-left">Block Mode</span>
                 <span id="wsStatusBadge" class="ws-status-badge">No folder</span>
                 <span id="cursorPos" class="status-right">Ln 1, Col 1</span>
+                <button id="statusHelpBtn" class="status-help-btn" onclick="toggleHelpModal()" title="Help & Shortcuts (? / Alt+H)">
+                    <i data-lucide="help-circle" size="11"></i> Help (?)
+                </button>
             </div>
         </div>
     </div>
 
     <!-- Modal -->
     <div id="modalOverlay" class="modal-overlay">
-        <div class="modal-container">
+        <div class="modal-container" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
             <div id="modalTitle" class="modal-title">Enter name</div>
             <input id="modalInput" class="modal-input" type="text" spellcheck="false" />
             <div id="modalMessage" class="modal-message hidden"></div>
@@ -296,6 +344,131 @@
                     <button id="modalCancelBtn" class="modal-btn secondary">Cancel</button>
                     <button id="modalConfirmBtn" class="modal-btn primary">Confirm</button>
                 </div>
+                <div id="modalAlertButtons" class="modal-buttons hidden">
+                    <button id="modalAlertOkBtn" class="modal-btn primary">OK</button>
+                </div>
+                <div id="modalChoiceButtons" class="modal-choices hidden"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Help / Product Guide Modal -->
+    <div id="helpModalOverlay" class="modal-overlay">
+        <div class="modal-container help-modal-container" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
+            <div class="help-modal-header">
+                <div class="help-brand-wrap">
+                    <img src="assets/keeplocal.png" alt="KeepLocal" class="help-logo-img">
+                    <div>
+                        <h2 id="helpModalTitle" class="help-modal-title">Welcome to Keep<span>Local</span></h2>
+                        <p class="help-modal-subtitle">Private, local-first notes editor & markdown workspace</p>
+                    </div>
+                </div>
+                <button class="help-close-btn" onclick="hideHelpModal()" title="Close (Esc or ?)" aria-label="Close Help">
+                    <i data-lucide="x" size="16"></i>
+                </button>
+            </div>
+
+            <div class="help-modal-body">
+                <!-- Key Features -->
+                <div class="help-section-title">
+                    <i data-lucide="sparkles" size="14"></i>
+                    <span>Key Features</span>
+                </div>
+                <div class="help-features-grid">
+                    <div class="help-feature-card">
+                        <div class="help-feature-icon">
+                            <i data-lucide="shield-check" size="18"></i>
+                        </div>
+                        <div class="help-feature-content">
+                            <h4>100% Private & Local</h4>
+                            <p>No login, no cloud databases, and zero tracking. Your notes and files stay strictly on your device.</p>
+                        </div>
+                    </div>
+
+                    <div class="help-feature-card">
+                        <div class="help-feature-icon">
+                            <i data-lucide="folder-sync" size="18"></i>
+                        </div>
+                        <div class="help-feature-content">
+                            <h4>Bi-Directional Folder Sync</h4>
+                            <p>Connect any directory on your computer via File System Access API with automated real-time background sync.</p>
+                        </div>
+                    </div>
+
+                    <div class="help-feature-card">
+                        <div class="help-feature-icon">
+                            <i data-lucide="edit-3" size="18"></i>
+                        </div>
+                        <div class="help-feature-content">
+                            <h4>Dual Editor Modes</h4>
+                            <p>Rich <b>Block Mode</b> with slash commands (<code>/</code>), task lists, code blocks, tables, and <b>Raw Markdown</b> mode with syntax highlighting.</p>
+                        </div>
+                    </div>
+
+                    <div class="help-feature-card">
+                        <div class="help-feature-icon">
+                            <i data-lucide="layout-grid" size="18"></i>
+                        </div>
+                        <div class="help-feature-content">
+                            <h4>Workspaces & Multi-Tabs</h4>
+                            <p>Create multiple workspaces, organize folders in the explorer, work across tabs, and backup or restore via ZIP.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Shortcuts Cheat Sheet -->
+                <div class="help-section-title">
+                    <i data-lucide="keyboard" size="14"></i>
+                    <span>Keyboard Shortcuts</span>
+                </div>
+                <div class="help-shortcuts-grid">
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>Ctrl</kbd> / <kbd>Cmd</kbd> + <kbd>S</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Save & sync note to connected folder</div>
+                    </div>
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>Alt</kbd> + <kbd>N</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Create new note in active folder</div>
+                    </div>
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>Alt</kbd> + <kbd>W</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Close current tab / note</div>
+                    </div>
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>/</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Open slash command menu in Block Editor</div>
+                    </div>
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>L</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Toggle Light / Dark theme</div>
+                    </div>
+                    <div class="help-shortcut-row">
+                        <div class="help-shortcut-keys">
+                            <kbd>?</kbd> or <kbd>F1</kbd> or <kbd>Alt</kbd> + <kbd>H</kbd>
+                        </div>
+                        <div class="help-shortcut-desc">Toggle this Help modal anytime</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="help-modal-footer">
+                <div class="help-footer-hint">
+                    <i data-lucide="help-circle" size="13"></i>
+                    <span>Press <kbd>?</kbd> or <kbd>Alt+H</kbd> anytime to toggle this guide</span>
+                </div>
+                <button class="modal-btn primary help-got-it-btn" onclick="hideHelpModal()">
+                    Got it, let's start!
+                </button>
             </div>
         </div>
     </div>
