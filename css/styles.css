@@ -329,7 +329,7 @@ button {
 .section-actions {
 	display: flex;
 	align-items: center;
-	gap: 1px;
+	gap: 5px;
 	opacity: 0;
 	transition: opacity var(--transition);
 }
@@ -463,7 +463,7 @@ button {
 }
 
 .file-item .icon {
-	margin-right: 8px;
+	margin-right: 10px;
 	flex-shrink: 0;
 	color: var(--text-muted);
 	width: 16px;
