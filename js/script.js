@@ -88,45 +88,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const supportsFS = "showDirectoryPicker" in window;
 
 	// ============================================================
-	// INDEXEDDB — persist folder handles
+	// INDEXEDDB DELEGATION (KeepLocalDB)
 	// ============================================================
-	const IDB_NAME = "keeplocal_db";
-	const IDB_STORE = "handles";
-
-	function idbOpen() {
-		return new Promise((res, rej) => {
-			const r = indexedDB.open(IDB_NAME, 1);
-			r.onupgradeneeded = e => e.target.result.createObjectStore(IDB_STORE);
-			r.onsuccess = e => res(e.target.result);
-			r.onerror = () => rej(r.error);
-		});
-	}
-	async function idbSet(key, val) {
-		try {
-			const db = await idbOpen();
-			const tx = db.transaction(IDB_STORE, "readwrite");
-			tx.objectStore(IDB_STORE).put(val, key);
-			return new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
-		} catch (e) { console.warn("idbSet:", e); }
-	}
-	async function idbGet(key) {
-		try {
-			const db = await idbOpen();
-			return new Promise((res, rej) => {
-				const tx = db.transaction(IDB_STORE, "readonly");
-				const req = tx.objectStore(IDB_STORE).get(key);
-				req.onsuccess = () => res(req.result);
-				req.onerror = () => rej(req.error);
-			});
-		} catch { return null; }
-	}
-	async function idbDel(key) {
-		try {
-			const db = await idbOpen();
-			const tx = db.transaction(IDB_STORE, "readwrite");
-			tx.objectStore(IDB_STORE).delete(key);
-		} catch (e) { console.warn("idbDel:", e); }
-	}
+	const idbSet = (key, val) => KeepLocalDB.set(KeepLocalDB.STORES.HANDLES, key, val);
+	const idbGet = (key) => KeepLocalDB.get(KeepLocalDB.STORES.HANDLES, key);
+	const idbDel = (key) => KeepLocalDB.del(KeepLocalDB.STORES.HANDLES, key);
 
 	// ============================================================
 	// UNIQUE ID
@@ -161,33 +127,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 	}
 
-	function getLocalStorageUsageChars() {
-		let total = 0;
-		try {
-			for (let i = 0; i < localStorage.length; i++) {
-				const key = localStorage.key(i);
-				if (key) {
-					const val = localStorage.getItem(key);
-					total += key.length + (val ? val.length : 0);
-				}
-			}
-		} catch (_) { }
-		return total;
-	}
-
-	function checkStorageQuota() {
+	async function checkStorageQuota() {
 		if (workspaceHandle && fsPermissionGranted) {
 			updateStorageQuotaUI(false, 0);
 			return;
 		}
-		const chars = getLocalStorageUsageChars();
-		const maxChars = 5242880; // ~5MB default browser quota limit
-		const pct = Math.min(100, Math.round((chars / maxChars) * 100));
-
-		if (pct >= 80) {
-			updateStorageQuotaUI(pct >= 98, pct);
-		} else {
-			updateStorageQuotaUI(false, pct);
+		try {
+			const est = await KeepLocalDB.getStorageEstimate();
+			if (est && est.isSupported && est.quota > 0) {
+				const pct = est.percentage;
+				if (pct >= 80) {
+					updateStorageQuotaUI(pct >= 95, pct);
+				} else {
+					updateStorageQuotaUI(false, pct);
+				}
+			} else {
+				updateStorageQuotaUI(false, 0);
+			}
+		} catch (_) {
+			updateStorageQuotaUI(false, 0);
 		}
 	}
 
@@ -242,10 +200,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (supportsFS) {
 			const isUnauthorizedFolder = workspaceHandle && !fsPermissionGranted;
 			showChoiceModal({
-				title: "Browser Storage Limit Reached (~5MB)",
+				title: "Browser Storage Limit Reached",
 				message: isUnauthorizedFolder
 					? `Your browser's storage limit has been reached, and folder "${workspaceHandle.name}" is not authorized. Grant folder access to save unlimited notes directly to your hard drive.`
-					: "Your browser's local storage quota has been reached. New changes cannot be saved locally. Connect a computer folder to save unlimited notes directly to your hard drive, or export your notes.",
+					: "Your browser's storage quota has been reached. New changes cannot be saved locally. Connect a computer folder to save unlimited notes directly to your hard drive, or export your notes.",
 				choices: [
 					{
 						label: isUnauthorizedFolder ? "Re-authorize Folder (Recommended)" : "Connect Folder (Recommended)",
@@ -279,22 +237,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 		} else {
 			showAlertModal(
 				"Browser Storage Full",
-				"Your browser's local storage limit (~5MB) has been reached. Please export your notes or delete unneeded files to free up space."
+				"Your browser's storage limit has been reached. Please export your notes or delete unneeded files to free up space."
 			);
 		}
 	}
 
 	function saveWorkspaceMeta() {
 		try {
-			localStorage.setItem("keeplocal_workspaces", JSON.stringify(workspaces));
+			KeepLocalDB.saveWorkspaces(workspaces).catch(e => handleStorageError(e, "saveWorkspaceMeta"));
 		} catch (e) {
 			handleStorageError(e, "saveWorkspaceMeta");
 		}
 	}
-	function loadWorkspaceMeta() {
+	async function loadWorkspaceMeta() {
 		try {
-			const raw = localStorage.getItem("keeplocal_workspaces");
-			workspaces = raw ? JSON.parse(raw) : [];
+			workspaces = await KeepLocalDB.getWorkspaces();
 		} catch (e) {
 			console.warn("loadWorkspaceMeta:", e);
 			workspaces = [];
@@ -337,7 +294,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				await processNode(f);
 			}
 			if (modified && wsId) {
-				localStorage.setItem(`keeplocal_files_${wsId}`, JSON.stringify(files));
+				await KeepLocalDB.saveFiles(wsId, files);
 				checkStorageQuota();
 			}
 		} catch (_) { }
@@ -347,23 +304,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function saveWsFiles(wsId) {
-		try {
-			localStorage.setItem(`keeplocal_files_${wsId}`, JSON.stringify(files));
+		if (!wsId) return Promise.resolve();
+		return KeepLocalDB.saveFiles(wsId, files).then(() => {
 			checkStorageQuota();
-		} catch (e) {
+		}).catch(e => {
 			handleStorageError(e, "saveWsFiles");
 			if (isQuotaExceededError(e)) {
 				optimizeOversizedFiles(wsId);
 			}
-		}
+		});
 	}
-	function loadWsFiles(wsId) {
+	async function loadWsFiles(wsId) {
 		try {
-			const raw = localStorage.getItem(`keeplocal_files_${wsId}`);
-			files = raw ? JSON.parse(raw) : [];
-			if (raw && raw.length > 500 * 1024 && raw.includes("data:image/")) {
-				setTimeout(() => optimizeOversizedFiles(wsId), 1200);
-			}
+			files = await KeepLocalDB.getFiles(wsId);
 			checkStorageQuota();
 		} catch (e) {
 			console.warn("loadWsFiles:", e);
@@ -372,21 +325,20 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function saveWsConfig(wsId) {
+		if (!wsId) return Promise.resolve();
 		const sidebar = document.querySelector(".sidebar");
-		try {
-			localStorage.setItem(`keeplocal_cfg_${wsId}`, JSON.stringify({
-				theme, fontSize, selectedId, editorMode, openTabs, isWordWrap,
-				sidebarWidth: sidebar ? sidebar.offsetWidth : undefined
-			}));
-		} catch (e) {
+		return KeepLocalDB.saveConfig(wsId, {
+			theme, fontSize, selectedId, editorMode, openTabs, isWordWrap,
+			sidebarWidth: sidebar ? sidebar.offsetWidth : undefined
+		}).catch(e => {
 			handleStorageError(e, "saveWsConfig");
-		}
+		});
 	}
-	function loadWsConfig(wsId) {
+	async function loadWsConfig(wsId) {
 		try {
-			const raw = localStorage.getItem(`keeplocal_cfg_${wsId}`);
-			if (raw) {
-				const c = JSON.parse(raw);
+			const c = await KeepLocalDB.getConfig(wsId);
+			const sidebar = document.querySelector(".sidebar");
+			if (c) {
 				theme = c.theme || "dark";
 				fontSize = Number.isFinite(Number(c.fontSize))
 					? Number(c.fontSize)
@@ -412,17 +364,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 			openTabs = [];
 			isWordWrap = false;
 			document.documentElement.style.removeProperty("--sidebar-width");
+			const sidebar = document.querySelector(".sidebar");
 			if (sidebar) sidebar.style.width = "";
 		}
 	}
 
-	function deleteWsData(wsId) {
+	async function deleteWsData(wsId) {
+		if (!wsId) return;
 		try {
-			localStorage.removeItem(`keeplocal_files_${wsId}`);
-			localStorage.removeItem(`keeplocal_cfg_${wsId}`);
-			localStorage.removeItem(`keeplocal_deletions_${wsId}`);
+			await KeepLocalDB.deleteWorkspaceData(wsId);
 		} catch (_) { }
-		idbDel(`handle_${wsId}`);
 		checkStorageQuota();
 	}
 
@@ -433,17 +384,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function saveWsDeletions(wsId) {
-		try {
-			localStorage.setItem(`keeplocal_deletions_${wsId}`, JSON.stringify(pendingDeletions));
-		} catch (e) {
+		if (!wsId) return Promise.resolve();
+		return KeepLocalDB.saveDeletions(wsId, pendingDeletions).catch(e => {
 			handleStorageError(e, "saveWsDeletions");
-		}
+		});
 	}
 
-	function loadWsDeletions(wsId) {
+	async function loadWsDeletions(wsId) {
 		try {
-			const raw = localStorage.getItem(`keeplocal_deletions_${wsId}`);
-			pendingDeletions = raw ? JSON.parse(raw) : [];
+			pendingDeletions = await KeepLocalDB.getDeletions(wsId);
 		} catch {
 			pendingDeletions = [];
 		}
@@ -945,12 +894,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 			saveWorkspaceMeta();
 
 			// Load config for this workspace
-			loadWsConfig(wsId);
-			loadWsDeletions(wsId);
+			await loadWsConfig(wsId);
+			await loadWsDeletions(wsId);
 
 			// Load files (unless already in memory from folder read)
 			if (!skipFileLoad) {
-				loadWsFiles(wsId);
+				await loadWsFiles(wsId);
 			}
 
 			// Try to restore folder handle from IDB
@@ -2759,511 +2708,46 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	// ============================================================
-	// EDITOR.JS MARKDOWN BRIDGE
-	// ============================================================
-	// EDITOR.JS MARKDOWN BRIDGE
+	// EDITOR.JS MARKDOWN BRIDGE (Delegated to KeepLocalMarkdown)
 	// ============================================================
 	function sanitizeUrl(url) {
-		if (!url) return "#";
-		const trimmed = url.trim();
-		// Allow safe web schemes and relative anchors/paths
-		if (/^(?:(?:https?|mailto|tel):|\/|\.\/|\.\.\/|#)/i.test(trimmed)) {
-			return trimmed;
-		}
-		// Allow blob URLs
-		if (/^blob:https?:\/\//i.test(trimmed)) {
-			return trimmed;
-		}
-		// Allow image data URIs (prefix check to avoid catastrophic regex backtracking on large payloads)
-		if (/^data:image\/(?:png|jpeg|jpg|gif|svg\+xml|webp|ico|avif);base64,/i.test(trimmed)) {
-			return trimmed;
-		}
-		return "#";
+		return KeepLocalMarkdown.sanitizeUrl(url);
 	}
 
 	function parseStandaloneImage(str) {
-		if (!str) return null;
-		const t = str.trim();
-		if (!t.startsWith("![") || !t.endsWith(")")) return null;
-		const bracketEnd = t.indexOf("](");
-		if (bracketEnd === -1) return null;
-		const alt = t.slice(2, bracketEnd);
-		if (alt.includes("[") || alt.includes("]")) return null;
-		const url = t.slice(bracketEnd + 2, -1).trim();
-		if (!url) return null;
-		return { alt, url };
+		return KeepLocalMarkdown.parseStandaloneImage(str);
 	}
 
 	function replaceMarkdownLinksAndImages(text, sanitizeUrlFn) {
-		if (!text) return "";
-		let result = "";
-		let i = 0;
-		const len = text.length;
-
-		while (i < len) {
-			const isImage = (text[i] === "!" && text[i + 1] === "[");
-			const isLink = (text[i] === "[");
-
-			if (!isImage && !isLink) {
-				result += text[i];
-				i++;
-				continue;
-			}
-
-			const bracketStart = isImage ? i + 1 : i;
-			let bracketDepth = 0;
-			let bracketEnd = -1;
-
-			for (let k = bracketStart; k < len; k++) {
-				if (text[k] === "\n") break;
-				if (text[k] === "[") bracketDepth++;
-				else if (text[k] === "]") {
-					bracketDepth--;
-					if (bracketDepth === 0) {
-						bracketEnd = k;
-						break;
-					}
-				}
-			}
-
-			if (bracketEnd === -1 || bracketEnd + 1 >= len || text[bracketEnd + 1] !== "(") {
-				result += text[i];
-				i++;
-				continue;
-			}
-
-			const rawLabel = text.slice(bracketStart + 1, bracketEnd);
-			let parenDepth = 1;
-			let urlEnd = -1;
-			let j = bracketEnd + 2;
-
-			while (j < len) {
-				const char = text[j];
-				if (char === "\n") break;
-				if (char === "(") {
-					parenDepth++;
-				} else if (char === ")") {
-					parenDepth--;
-					if (parenDepth === 0) {
-						urlEnd = j;
-						break;
-					}
-				}
-				j++;
-			}
-
-			if (urlEnd === -1) {
-				result += text[i];
-				i++;
-				continue;
-			}
-
-			let rawUrl = text.slice(bracketEnd + 2, urlEnd).trim();
-			const titleMatch = rawUrl.match(/^<?([^\s>]+)>?(?:\s+["\x27](.*)["\x27])?$/);
-			const url = titleMatch ? titleMatch[1] : rawUrl;
-			const safeUrl = sanitizeUrlFn ? sanitizeUrlFn(url) : url;
-
-			if (isImage) {
-				if (safeUrl === "#") {
-					result += rawLabel;
-				} else {
-					result += `<img src="${safeUrl}" alt="${rawLabel}" style="max-width:100%; border-radius:6px; margin:4px 0;" />`;
-				}
-			} else {
-				const labelHtml = isImage ? rawLabel : replaceMarkdownLinksAndImages(rawLabel, sanitizeUrlFn);
-				if (safeUrl === "#") {
-					result += `<a href="#" rel="noopener" onclick="return false;">${labelHtml}</a>`;
-				} else {
-					result += `<a href="${safeUrl}" target="_blank" rel="noopener">${labelHtml}</a>`;
-				}
-			}
-
-			i = urlEnd + 1;
-		}
-
-		return result;
+		return KeepLocalMarkdown.replaceMarkdownLinksAndImages(text, sanitizeUrlFn);
 	}
 
 	async function compressDataUrl(dataUrl, maxWidth = 1200, maxHeight = 1200, quality = 0.78) {
-		if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) {
-			return dataUrl;
-		}
-		if (dataUrl.startsWith("data:image/svg+xml")) return dataUrl;
-		if (dataUrl.length < 80 * 1024) return dataUrl; // Already compact
-
-		return new Promise((resolve) => {
-			const img = new Image();
-			img.onload = () => {
-				let { width, height } = img;
-				if (width > maxWidth || height > maxHeight) {
-					const ratio = Math.min(maxWidth / width, maxHeight / height);
-					width = Math.round(width * ratio);
-					height = Math.round(height * ratio);
-				}
-				const canvas = document.createElement("canvas");
-				canvas.width = Math.max(1, width);
-				canvas.height = Math.max(1, height);
-				const ctx = canvas.getContext("2d");
-				ctx.drawImage(img, 0, 0, width, height);
-
-				let result = "";
-				try {
-					result = canvas.toDataURL("image/webp", quality);
-					if (!result.startsWith("data:image/webp")) {
-						result = canvas.toDataURL("image/jpeg", quality);
-					}
-				} catch (_) {
-					try { result = canvas.toDataURL("image/jpeg", quality); } catch (_) { result = dataUrl; }
-				}
-				resolve((result && result.length < dataUrl.length) ? result : dataUrl);
-			};
-			img.onerror = () => resolve(dataUrl);
-			img.src = dataUrl;
-		});
+		return KeepLocalMarkdown.compressDataUrl(dataUrl, maxWidth, maxHeight, quality);
 	}
 
 	async function compressImageFile(file, maxWidth = 1200, maxHeight = 1200, quality = 0.78) {
-		if (!file || !file.type.startsWith("image/")) {
-			return { url: "", caption: file?.name || "image" };
-		}
-		if (file.type === "image/svg+xml") {
-			if (file.size < 150 * 1024) {
-				return new Promise((resolve) => {
-					const reader = new FileReader();
-					reader.onload = () => resolve({ url: reader.result, caption: file.name || "image" });
-					reader.onerror = () => resolve({ url: "", caption: file.name || "image" });
-					reader.readAsDataURL(file);
-				});
-			}
-		}
-		return new Promise((resolve) => {
-			const img = new Image();
-			const url = URL.createObjectURL(file);
-			img.onload = () => {
-				URL.revokeObjectURL(url);
-				let { width, height } = img;
-				if (width > maxWidth || height > maxHeight) {
-					const ratio = Math.min(maxWidth / width, maxHeight / height);
-					width = Math.round(width * ratio);
-					height = Math.round(height * ratio);
-				}
-				const canvas = document.createElement("canvas");
-				canvas.width = Math.max(1, width);
-				canvas.height = Math.max(1, height);
-				const ctx = canvas.getContext("2d");
-				ctx.drawImage(img, 0, 0, width, height);
-
-				let dataUrl = "";
-				try {
-					dataUrl = canvas.toDataURL("image/webp", quality);
-					if (!dataUrl.startsWith("data:image/webp")) {
-						dataUrl = canvas.toDataURL("image/jpeg", quality);
-					}
-				} catch (_) {
-					try { dataUrl = canvas.toDataURL("image/jpeg", quality); } catch (_) { dataUrl = ""; }
-				}
-				resolve({ url: dataUrl, caption: file.name || "image" });
-			};
-			img.onerror = () => {
-				URL.revokeObjectURL(url);
-				const reader = new FileReader();
-				reader.onload = () => resolve({ url: reader.result, caption: file.name || "image" });
-				reader.onerror = () => resolve({ url: "", caption: file.name || "image" });
-				reader.readAsDataURL(file);
-			};
-			img.src = url;
-		});
+		return KeepLocalMarkdown.compressImageFile(file, maxWidth, maxHeight, quality);
 	}
 
 	function textToBlocks(text) {
-		if (!text?.trim()) return [{ type: "paragraph", data: { text: "" } }];
-		const lines = text.split("\n");
-		const blocks = [];
-		let inCode = false, codeBuf = [], tableBuf = [], currentCodeLang = "";
-		let listStack = [];
-
-		const flushCode = () => {
-			if (codeBuf.length || inCode) {
-				blocks.push({
-					type: "code",
-					data: {
-						code: codeBuf.join("\n"),
-						language: currentCodeLang || ""
-					}
-				});
-				codeBuf = [];
-				currentCodeLang = "";
-			}
-		};
-		const flushTable = () => {
-			if (!tableBuf.length) return;
-			// Check if table contains a markdown header separator row, e.g. | --- | --- | (MD-04)
-			const hasHeaderSep = tableBuf.length > 1 && tableBuf[1].split("|").slice(1, -1).every(c => /^:?-+:?$/.test(c.trim()));
-			const content = tableBuf
-				.map(r => r.split("|").slice(1, -1).map(c => c.trim()))
-				.filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c)));
-			if (content.length) {
-				blocks.push({ type: "table", data: { content, withHeadings: hasHeaderSep } });
-			}
-			tableBuf = [];
-		};
-
-		for (const line of lines) {
-			if (line.trim().startsWith("```")) {
-				listStack = [];
-				if (inCode) {
-					inCode = false;
-					flushCode();
-				} else {
-					flushTable();
-					inCode = true;
-					currentCodeLang = line.trim().slice(3).trim(); // MD-02
-				}
-				continue;
-			}
-			if (inCode) { codeBuf.push(line); continue; }
-			if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
-				listStack = [];
-				tableBuf.push(line.trim());
-				continue;
-			}
-			flushTable();
-			const t = line.trim();
-			if (!t) {
-				listStack = [];
-				blocks.push({ type: "paragraph", data: { text: "" } });
-				continue;
-			}
-
-			// Horizontal divider (delimiter): ---, ***, ___
-			if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(t)) {
-				listStack = [];
-				blocks.push({ type: "delimiter", data: {} });
-				continue;
-			}
-
-			// Standalone image: ![alt](url)
-			const standaloneImg = parseStandaloneImage(t);
-			if (standaloneImg) {
-				listStack = [];
-				blocks.push({
-					type: "image",
-					data: {
-						url: standaloneImg.url,
-						caption: md2h(standaloneImg.alt)
-					}
-				});
-				continue;
-			}
-
-			// Headings H1 to H6
-			if (t.startsWith("###### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(7)), level: 6 } }); }
-			else if (t.startsWith("##### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(6)), level: 5 } }); }
-			else if (t.startsWith("#### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } }); }
-			else if (t.startsWith("### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } }); }
-			else if (t.startsWith("## ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } }); }
-			else if (t.startsWith("# ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(2)), level: 1 } }); }
-			// Alerts / Callouts: > [!NOTE] or > [!WARNING] or > [!TIP] etc.
-			else if (/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(t)) {
-				listStack = [];
-				const alertMatch = t.match(/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i);
-				const alertType = alertMatch[1].toUpperCase();
-				const alertTitle = alertMatch[2] ? md2h(alertMatch[2]) : (alertType.charAt(0) + alertType.slice(1).toLowerCase());
-				blocks.push({
-					type: "warning",
-					data: {
-						title: alertTitle,
-						message: ""
-					}
-				});
-			}
-			else if (t.startsWith("> ")) {
-				listStack = [];
-				const quoteText = md2h(t.slice(2));
-				const last = blocks[blocks.length - 1];
-				if (last?.type === "warning") {
-					last.data.message = last.data.message ? (last.data.message + "<br>" + quoteText) : quoteText;
-				} else if (last?.type === "quote") {
-					last.data.text = last.data.text ? (last.data.text + "<br>" + quoteText) : quoteText;
-				} else {
-					blocks.push({ type: "quote", data: { text: quoteText, caption: "" } });
-				}
-			}
-			else if (/^[ \t]*- \[[ xX]\] /.test(line)) {
-				listStack = [];
-				const checkMatch = line.match(/^[ \t]*- \[([ xX])\]\s*(.*)/);
-				const checked = checkMatch[1].toLowerCase() === "x";
-				const text = md2h(checkMatch[2]);
-				const last = blocks[blocks.length - 1];
-				if (last?.type === "checklist") last.data.items.push({ text, checked });
-				else blocks.push({ type: "checklist", data: { items: [{ text, checked }] } });
-			}
-			else {
-				// Check for unordered list (- or * or +) or ordered list (1. 2. etc.) (MD-03)
-				const ulMatch = line.match(/^([ \t]*)[-*+]\s+(.*)/);
-				const olMatch = line.match(/^([ \t]*)\d+\.\s+(.*)/);
-				if (ulMatch || olMatch) {
-					const isOrdered = !!olMatch;
-					const match = olMatch || ulMatch;
-					const rawIndent = match[1].replace(/\t/g, "  ").length;
-					const content = md2h(match[2]);
-					const style = isOrdered ? "ordered" : "unordered";
-
-					let lastBlock = blocks[blocks.length - 1];
-					if (!lastBlock || lastBlock.type !== "list") {
-						lastBlock = { type: "list", data: { style, items: [] } };
-						blocks.push(lastBlock);
-						listStack = [];
-					}
-
-					const newItem = { content, items: [] };
-					while (listStack.length > 0 && listStack[listStack.length - 1].indent >= rawIndent) {
-						listStack.pop();
-					}
-					if (listStack.length === 0) {
-						lastBlock.data.items.push(newItem);
-					} else {
-						listStack[listStack.length - 1].item.items.push(newItem);
-					}
-					listStack.push({ indent: rawIndent, item: newItem });
-				} else {
-					listStack = [];
-					blocks.push({ type: "paragraph", data: { text: md2h(line) } });
-				}
-			}
-		}
-		flushCode(); flushTable();
-		return blocks.length ? blocks : [{ type: "paragraph", data: { text: "" } }];
-	}
-
-	function md2h(s) {
-		if (!s) return "";
-		// Escape raw HTML entities first to prevent raw HTML/script injection (MD-01)
-		let res = escHtml(s);
-		// Restore allowed safe tags: <u> and <mark>
-		res = res.replace(/&lt;u&gt;(.*?)&lt;\/u&gt;/gi, '<u class="cdx-underline">$1</u>');
-		res = res.replace(/&lt;mark(?: class="cdx-marker")?&gt;(.*?)&lt;\/mark&gt;/gi, '<mark class="cdx-marker">$1</mark>');
-		// Markdown highlight syntax: ==text== -> <mark class="cdx-marker">text</mark>
-		res = res.replace(/==([^=]+)==/g, '<mark class="cdx-marker">$1</mark>');
-		// Convert Markdown image and link tags safely without ReDoS
-		res = replaceMarkdownLinksAndImages(res, sanitizeUrl);
-
-		// Protect all HTML tags so inline formatting never modifies attributes (e.g. href or src containing underscores)
-		const tagPlaceholders = [];
-		res = res.replace(/<[^>]+>/g, (tag) => {
-			const id = "\x00" + tagPlaceholders.length + "\x01";
-			tagPlaceholders.push(tag);
-			return id;
-		});
-
-		// Convert bold, italic, code
-		res = res.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/__(.*?)__/g, "<b>$1</b>")
-			.replace(/\*(.*?)\*/g, "<i>$1</i>").replace(/_(.*?)_/g, "<i>$1</i>")
-			.replace(/`(.*?)`/g, "<code>$1</code>");
-
-		// Restore protected HTML tags
-		if (tagPlaceholders.length) {
-			res = res.replace(/\x00(\d+)\x01/g, (_, idx) => tagPlaceholders[Number(idx)]);
-		}
-
-		return res;
-	}
-
-	function h2md(s) {
-		if (!s) return "";
-		return s
-			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*>/gi, "![$2]($1)")
-			.replace(/<img\s+[^>]*alt="([^"]*)"[^>]*src="([^"]*)"[^>]*>/gi, "![$1]($2)")
-			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*>/gi, "![]($1)")
-			.replace(/<a [^>]*href="(.*?)"[^>]*>(.*?)<\/a>/gi, (match, url, text) => {
-				if (url === "#") return text;
-				return `[${text}](${url})`;
-			})
-			.replace(/<mark[^>]*>(.*?)<\/mark>/gi, "==$1==")
-			.replace(/<u[^>]*>(.*?)<\/u>/gi, "%%%U_OPEN%%%$1%%%U_CLOSE%%%")
-			.replace(/<b>(.*?)<\/b>/gi, "**$1**").replace(/<strong>(.*?)<\/strong>/gi, "**$1**")
-			.replace(/<i>(.*?)<\/i>/gi, "*$1*").replace(/<em>(.*?)<\/em>/gi, "*$1*")
-			.replace(/<code[^>]*>(.*?)<\/code>/gi, "`$1`")
-			.replace(/<br\s*\/?>/gi, "\n")
-			.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
-			.replace(/<[^>]+>/g, "")
-			.replace(/%%%U_OPEN%%%/g, "<u>").replace(/%%%U_CLOSE%%%/g, "</u>");
-	}
-
-	function blocksToText(data) {
-		if (!data?.blocks) return "";
-		const lines = [];
-		for (const b of data.blocks) {
-			switch (b.type) {
-				case "header": lines.push("#".repeat(b.data.level || 1) + " " + h2md(b.data.text)); break;
-				case "paragraph": lines.push(h2md(b.data.text)); break;
-				case "delimiter": lines.push("---"); break;
-				case "image": {
-					const cap = h2md(b.data.caption || "").trim();
-					lines.push(`![${cap}](${b.data.url || ""})`);
-					break;
-				}
-				case "warning": {
-					const title = h2md(b.data.title || "").trim();
-					const msg = h2md(b.data.message || "").trim();
-					if (title && title.toLowerCase() !== "note") {
-						lines.push(`> [!NOTE] ${title}`);
-					} else {
-						lines.push(`> [!NOTE]`);
-					}
-					if (msg) {
-						msg.split("\n").forEach(l => lines.push(`> ${l}`));
-					}
-					break;
-				}
-				case "quote": {
-					const qText = h2md(b.data.text || "");
-					if (qText) {
-						qText.split("\n").forEach(l => lines.push(`> ${l}`));
-					} else {
-						lines.push(">");
-					}
-					if (b.data.caption) {
-						lines.push(`> — ${h2md(b.data.caption)}`);
-					}
-					break;
-				}
-				case "list":
-					(function extractItems(items, depth = 0, style = b.data.style || "unordered") {
-						(items || []).forEach((it, i) => {
-							const text = typeof it === "string" ? it : (it.content || it.text || "");
-							const indent = "  ".repeat(depth);
-							const prefix = style === "ordered" ? `${i + 1}. ` : "- ";
-							lines.push(indent + prefix + h2md(text));
-							if (it.items && it.items.length) {
-								extractItems(it.items, depth + 1, style);
-							}
-						});
-					})(b.data.items);
-					break;
-				case "checklist": (b.data.items || []).forEach(it => lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`)); break;
-				case "code":
-					const lang = b.data?.language ? b.data.language.trim() : "";
-					lines.push(`\`\`\`${lang}`, b.data?.code || "", "```");
-					break;
-				case "table":
-					if (b.data.content?.length) {
-						const withHeadings = b.data.withHeadings !== false;
-						b.data.content.forEach((r, i) => {
-							lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`);
-							if (i === 0 && withHeadings) {
-								lines.push(`| ${r.map(() => "---").join(" | ")} |`);
-							}
-						});
-					}
-					break;
-				default: if (b.data?.text) { lines.push(h2md(b.data.text)); } break;
-			}
-		}
-		return lines.join("\n").trim();
+		return KeepLocalMarkdown.textToBlocks(text);
 	}
 
 	window.textToBlocks = textToBlocks;
+
+	function md2h(s) {
+		return KeepLocalMarkdown.md2h(s);
+	}
+
+	function h2md(s) {
+		return KeepLocalMarkdown.h2md(s);
+	}
+
+	function blocksToText(data) {
+		return KeepLocalMarkdown.blocksToText(data);
+	}
+
 	window.blocksToText = blocksToText;
 
 	// ============================================================
@@ -4141,31 +3625,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// INIT
 	// ============================================================
-	loadWorkspaceMeta();
-
-	// Migrate old data from previous single-workspace version
-	const oldFiles = localStorage.getItem("keeplocal_files");
-	const oldCfg = localStorage.getItem("keeplocal_config");
-	if (oldFiles && workspaces.length === 0) {
-		const wsId = uid("ws");
-		const migFiles = JSON.parse(oldFiles);
-		const migCfg = oldCfg ? JSON.parse(oldCfg) : {};
-		workspaces.push({
-			id: wsId, name: "My Notes", createdAt: Date.now(),
-			lastOpenedAt: Date.now(), folderName: null, fileCount: countAllFiles(migFiles)
-		});
-		try {
-			localStorage.setItem(`keeplocal_files_${wsId}`, oldFiles);
-			if (oldCfg) localStorage.setItem(`keeplocal_cfg_${wsId}`, oldCfg);
-		} catch (e) {
-			handleStorageError(e, "migration");
-		}
-		try {
-			localStorage.removeItem("keeplocal_files");
-			localStorage.removeItem("keeplocal_config");
-		} catch (_) { }
-		saveWorkspaceMeta();
-	}
+	await KeepLocalDB.migrateFromLocalStorage();
+	await loadWorkspaceMeta();
 
 	// Apply last saved theme
 	const globalTheme = localStorage.getItem("keeplocal_global_theme") || "dark";
