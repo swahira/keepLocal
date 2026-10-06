@@ -4,6 +4,8 @@ deployment:
     - export DEPLOYPATH=/home2/dreammoo/keeplocal.swahira.com/
     - /bin/cp index.html $DEPLOYPATH
     - /bin/cp sw.js $DEPLOYPATH
+    - /bin/cp .htaccess $DEPLOYPATH
     - /bin/cp -R assets $DEPLOYPATH
     - /bin/cp -R css $DEPLOYPATH
     - /bin/cp -R js $DEPLOYPATH
+

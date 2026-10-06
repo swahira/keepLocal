@@ -56,6 +56,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const modeSwitchGroup = document.getElementById("modeSwitchGroup");
 	const modeBlockBtn = document.getElementById("modeBlockBtn");
 	const modePlainBtn = document.getElementById("modePlainBtn");
+	const editorLoadingOverlay = document.getElementById("editorLoadingOverlay");
+	const editorLoadingText = document.getElementById("editorLoadingText");
+
+	function showEditorLoading(message = "Loading note…") {
+		if (!editorLoadingOverlay) return;
+		if (editorLoadingText) editorLoadingText.textContent = message;
+		editorLoadingOverlay.classList.remove("hidden");
+	}
+
+	function hideEditorLoading() {
+		if (!editorLoadingOverlay) return;
+		editorLoadingOverlay.classList.add("hidden");
+	}
 
 	function isMarkdownFile(filename) {
 		if (!filename) return false;
@@ -163,7 +176,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function checkStorageQuota() {
-		if (workspaceHandle) {
+		if (workspaceHandle && fsPermissionGranted) {
 			updateStorageQuotaUI(false, 0);
 			return;
 		}
@@ -183,41 +196,63 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const text = document.getElementById("storageQuotaText");
 		if (!banner) return;
 
-		if (workspaceHandle) {
+		if (workspaceHandle && fsPermissionGranted) {
 			banner.classList.add("hidden");
 			return;
 		}
 
+		const quotaBtn = banner.querySelector(".storage-quota-btn");
+		const isUnauthorizedFolder = workspaceHandle && !fsPermissionGranted;
+
+		if (quotaBtn) {
+			if (isUnauthorizedFolder) {
+				quotaBtn.textContent = "Authorize";
+				quotaBtn.onclick = () => requestReauthorization();
+			} else {
+				quotaBtn.textContent = "Connect";
+				quotaBtn.onclick = () => saveWorkspace();
+			}
+		}
+
 		if (isFull) {
 			banner.className = "storage-quota-banner danger";
-			if (text) text.textContent = "Storage full! Connect folder";
+			if (text) {
+				text.textContent = isUnauthorizedFolder
+					? "Storage full! Re-authorize folder"
+					: "Storage full! Connect folder";
+			}
 			banner.classList.remove("hidden");
-			if (window.lucide) lucide.createIcons();
+			if (window.lucide) window.lucide.createIcons();
 		} else if (pct >= 80) {
 			banner.className = "storage-quota-banner warning";
 			if (text) text.textContent = `Storage ~${pct}% full`;
 			banner.classList.remove("hidden");
-			if (window.lucide) lucide.createIcons();
+			if (window.lucide) window.lucide.createIcons();
 		} else {
 			banner.classList.add("hidden");
 		}
 	}
 
 	function notifyStorageQuotaExceeded() {
-		if (workspaceHandle) return; // files are safely on physical disk
+		if (workspaceHandle && fsPermissionGranted) return; // files are safely on physical disk
 		const now = Date.now();
 		if (now - lastQuotaWarningTime < QUOTA_WARNING_COOLDOWN_MS) return;
 		lastQuotaWarningTime = now;
 
 		if (supportsFS) {
+			const isUnauthorizedFolder = workspaceHandle && !fsPermissionGranted;
 			showChoiceModal({
 				title: "Browser Storage Limit Reached (~5MB)",
-				message: "Your browser's local storage quota has been reached. New changes cannot be saved locally. Connect a computer folder to save unlimited notes directly to your hard drive, or export your notes.",
+				message: isUnauthorizedFolder
+					? `Your browser's storage limit has been reached, and folder "${workspaceHandle.name}" is not authorized. Grant folder access to save unlimited notes directly to your hard drive.`
+					: "Your browser's local storage quota has been reached. New changes cannot be saved locally. Connect a computer folder to save unlimited notes directly to your hard drive, or export your notes.",
 				choices: [
 					{
-						label: "Connect Folder (Recommended)",
-						description: "Save unlimited files directly to your computer's hard drive.",
-						action: "connect",
+						label: isUnauthorizedFolder ? "Re-authorize Folder (Recommended)" : "Connect Folder (Recommended)",
+						description: isUnauthorizedFolder
+							? `Grant disk write permission to "${workspaceHandle.name}".`
+							: "Save unlimited files directly to your computer's hard drive.",
+						action: isUnauthorizedFolder ? "reauth" : "connect",
 						primary: true
 					},
 					{
@@ -232,7 +267,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 					}
 				],
 				onSelect: (action) => {
-					if (action === "connect") {
+					if (action === "reauth") {
+						requestReauthorization();
+					} else if (action === "connect") {
 						saveWorkspace();
 					} else if (action === "export") {
 						exportAll();
@@ -264,18 +301,70 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 	}
 
+	let isOptimizingWsFiles = false;
+	async function optimizeOversizedFiles(wsId) {
+		if (isOptimizingWsFiles) return;
+		isOptimizingWsFiles = true;
+		try {
+			let modified = false;
+			const processNode = async (node) => {
+				if (node.type === "file" && typeof node.content === "string") {
+					if (node.content.includes("data:image/") && node.content.length > 150 * 1024) {
+						const regex = /data:image\/(?:png|jpeg|jpg);base64,[A-Za-z0-9+/=]{1000,}/g;
+						const matches = node.content.match(regex);
+						if (matches && matches.length > 0) {
+							let newContent = node.content;
+							for (const match of matches) {
+								if (match.length > 80 * 1024) {
+									const comp = await compressDataUrl(match);
+									if (comp && comp.length < match.length) {
+										newContent = newContent.replace(match, comp);
+										modified = true;
+									}
+								}
+							}
+							node.content = newContent;
+						}
+					}
+				}
+				if (node.children) {
+					for (const child of node.children) {
+						await processNode(child);
+					}
+				}
+			};
+			for (const f of files) {
+				await processNode(f);
+			}
+			if (modified && wsId) {
+				localStorage.setItem(`keeplocal_files_${wsId}`, JSON.stringify(files));
+				checkStorageQuota();
+			}
+		} catch (_) { }
+		finally {
+			isOptimizingWsFiles = false;
+		}
+	}
+
 	function saveWsFiles(wsId) {
 		try {
 			localStorage.setItem(`keeplocal_files_${wsId}`, JSON.stringify(files));
 			checkStorageQuota();
 		} catch (e) {
 			handleStorageError(e, "saveWsFiles");
+			if (isQuotaExceededError(e)) {
+				optimizeOversizedFiles(wsId);
+			}
 		}
 	}
 	function loadWsFiles(wsId) {
 		try {
 			const raw = localStorage.getItem(`keeplocal_files_${wsId}`);
 			files = raw ? JSON.parse(raw) : [];
+			if (raw && raw.length > 500 * 1024 && raw.includes("data:image/")) {
+				setTimeout(() => optimizeOversizedFiles(wsId), 1200);
+			}
+			checkStorageQuota();
 		} catch (e) {
 			console.warn("loadWsFiles:", e);
 			files = [];
@@ -375,6 +464,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		welcomeScreen.classList.remove("hidden");
 		appShell.classList.add("hidden");
 		document.title = "KeepLocal – Workspaces";
+		if (window.location.hash !== "#/workspaces" && !window.location.search.includes("view=workspaces")) {
+			try { history.replaceState(null, "", "#/workspaces"); } catch (_) { }
+		}
 		renderWorkspaceCards();
 		// FS banner
 		if (!supportsFS) {
@@ -382,8 +474,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (fsBanner) {
 				fsBanner.classList.remove("hidden");
 				if (!isSecure) {
-					fsBanner.innerHTML = `<i data-lucide="alert-triangle" size="14"></i> Folder sync requires a Secure Context. Access via <a href="http://localhost:${location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
-					if (window.lucide) lucide.createIcons();
+					fsBanner.innerHTML = `<i data-lucide="alert-triangle" size="14"></i> Folder sync requires a Secure Context. Access via <a href="http://localhost:${window.location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
+					if (window.lucide) window.lucide.createIcons();
 				}
 			}
 			const openFolderBtn = document.getElementById("openFolderBtn");
@@ -399,9 +491,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 		wsCountBadge.textContent = workspaces.length;
 
 		if (workspaces.length === 0) {
-			workspacesEmpty.querySelector("p").textContent = "No workspaces yet";
-			workspacesEmpty.querySelector("small").textContent = 'Click "New Workspace" to get started';
-			workspacesEmpty.classList.remove("hidden");
+			const p = workspacesEmpty?.querySelector("p");
+			if (p) p.textContent = "No workspaces yet";
+			const small = workspacesEmpty?.querySelector("small");
+			if (small) small.textContent = 'Click "New Workspace" to get started';
+			workspacesEmpty?.classList.remove("hidden");
 			return;
 		}
 
@@ -412,12 +506,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 			: sorted;
 
 		if (filtered.length === 0) {
-			workspacesEmpty.querySelector("p").textContent = "No matching workspaces";
-			workspacesEmpty.querySelector("small").textContent = "Try a different search term";
-			workspacesEmpty.classList.remove("hidden");
+			const p = workspacesEmpty?.querySelector("p");
+			if (p) p.textContent = "No matching workspaces";
+			const small = workspacesEmpty?.querySelector("small");
+			if (small) small.textContent = "Try a different search term";
+			workspacesEmpty?.classList.remove("hidden");
 			return;
 		}
-		workspacesEmpty.classList.add("hidden");
+		workspacesEmpty?.classList.add("hidden");
 
 		for (const ws of filtered) {
 			const card = document.createElement("div");
@@ -455,7 +551,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			workspacesList.appendChild(card);
 		}
 
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	function escHtml(str) {
@@ -560,7 +656,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			wsDropdownList.appendChild(item);
 		});
 
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	window.addEventListener("click", (e) => {
@@ -642,7 +738,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	window.openFolderWorkspace = async function () {
 		if (!supportsFS) {
 			if (!isSecure) {
-				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${location.port || 8000}.`);
+				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${window.location.port || 8000}.`);
 			} else {
 				showAlertModal("Not supported", "Folder sync requires Chrome, Edge, or Brave.");
 			}
@@ -830,78 +926,99 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// Open a workspace → switch to editor view
 	async function openWorkspace(wsId, skipFileLoad = false) {
 		const ws = workspaces.find(w => w.id === wsId);
-		if (!ws) return;
-
-		// Save current active workspace before opening the new one
-		if (activeWsId && activeWsId !== wsId) {
-			await autoSaveCurrentFile();
-			saveWsFiles(activeWsId);
-			saveWsConfig(activeWsId);
-			updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
+		if (!ws) {
+			showWelcome();
+			return;
 		}
 
-		activeWsId = wsId;
-		ws.lastOpenedAt = Date.now();
-		saveWorkspaceMeta();
-
-		// Load config for this workspace
-		loadWsConfig(wsId);
-		loadWsDeletions(wsId);
-
-		// Load files (unless already in memory from folder read)
-		if (!skipFileLoad) {
-			loadWsFiles(wsId);
-		}
-
-		// Try to restore folder handle from IDB
-		workspaceHandle = null;
-		fsPermissionGranted = false;
-		if (supportsFS && ws.folderName) {
-			try {
-				const h = await idbGet(`handle_${wsId}`);
-				if (h) {
-					workspaceHandle = h;
-					const perm = await h.queryPermission({ mode: "readwrite" });
-					fsPermissionGranted = (perm === "granted");
-				}
-			} catch (e) { console.warn("Could not restore handle:", e); }
-		}
-
-		// Validate selectedId
-		if (selectedId && !findNode(files, selectedId)) selectedId = null;
-
-		// If no selectedId, but openTabs has valid files, select the first valid tab
-		if (!selectedId && openTabs.length > 0) {
-			const validTab = openTabs.find(tid => {
-				const n = findNode(files, tid);
-				return n && n.type === "file";
-			});
-			if (validTab) selectedId = validTab;
-		}
-
-		// Save active workspace ID so page reload returns here directly
 		try {
-			localStorage.setItem("keeplocal_active_ws_id", wsId);
-		} catch (e) {
-			handleStorageError(e, "openWorkspace");
+			// Save current active workspace before opening the new one
+			if (activeWsId && activeWsId !== wsId) {
+				await autoSaveCurrentFile();
+				saveWsFiles(activeWsId);
+				saveWsConfig(activeWsId);
+				updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
+			}
+
+			activeWsId = wsId;
+			ws.lastOpenedAt = Date.now();
+			saveWorkspaceMeta();
+
+			// Load config for this workspace
+			loadWsConfig(wsId);
+			loadWsDeletions(wsId);
+
+			// Load files (unless already in memory from folder read)
+			if (!skipFileLoad) {
+				loadWsFiles(wsId);
+			}
+
+			// Try to restore folder handle from IDB
+			workspaceHandle = null;
+			fsPermissionGranted = false;
+			if (supportsFS && ws.folderName) {
+				try {
+					const h = await idbGet(`handle_${wsId}`);
+					if (h) {
+						workspaceHandle = h;
+						const perm = await h.queryPermission({ mode: "readwrite" });
+						fsPermissionGranted = (perm === "granted");
+					}
+				} catch (e) { console.warn("Could not restore handle:", e); }
+			}
+
+			// Validate selectedId
+			if (selectedId && !findNode(files, selectedId)) selectedId = null;
+
+			// If no selectedId, but openTabs has valid files, select the first valid tab
+			if (!selectedId && openTabs.length > 0) {
+				const validTab = openTabs.find(tid => {
+					const n = findNode(files, tid);
+					return n && n.type === "file";
+				});
+				if (validTab) selectedId = validTab;
+			}
+
+			// Save active workspace ID so page reload returns here directly
+			try {
+				localStorage.setItem("keeplocal_active_ws_id", wsId);
+			} catch (e) {
+				handleStorageError(e, "openWorkspace");
+			}
+
+			// Switch views
+			welcomeScreen.classList.add("hidden");
+			appShell.classList.remove("hidden");
+			document.title = `${ws.name} – KeepLocal`;
+
+			// Update hash route if needed
+			if (window.location.hash !== `#/workspace/${wsId}`) {
+				try { history.replaceState(null, "", `#/workspace/${wsId}`); } catch (_) { }
+			}
+
+			// Update UI
+			sidebarWsName.textContent = ws.name;
+			applyConfig();
+			updateEditorModeUI();
+			initWorkspaceButton();
+			updateFolderUI();
+			render();
+			await loadFile();
+			checkStorageQuota();
+
+			if (window.lucide) window.lucide.createIcons();
+		} catch (err) {
+			console.error("[KeepLocal] Error opening workspace:", err);
+			try {
+				localStorage.removeItem("keeplocal_active_ws_id");
+			} catch (_) { }
+			activeWsId = null;
+			showWelcome();
+			showAlertModal(
+				"Workspace Error",
+				`There was a problem loading workspace "${ws.name}". The workspace manager has been opened so you can choose another workspace, export a backup, or manage your notes.`
+			);
 		}
-
-		// Switch views
-		welcomeScreen.classList.add("hidden");
-		appShell.classList.remove("hidden");
-		document.title = `${ws.name} – KeepLocal`;
-
-		// Update UI
-		sidebarWsName.textContent = ws.name;
-		applyConfig();
-		updateEditorModeUI();
-		initWorkspaceButton();
-		updateFolderUI();
-		render();
-		await loadFile();
-		checkStorageQuota();
-
-		if (window.lucide) lucide.createIcons();
 	}
 
 	window.goHome = async function () {
@@ -915,6 +1032,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 		try {
 			localStorage.removeItem("keeplocal_active_ws_id");
+			if (window.location.hash !== "#/workspaces") {
+				history.pushState(null, "", "#/workspaces");
+			}
 		} catch (_) { }
 		activeWsId = null;
 		workspaceHandle = null;
@@ -977,7 +1097,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         `;
 
 			if (window.lucide) {
-				lucide.createIcons();
+				window.lucide.createIcons();
 			}
 		}
 
@@ -1113,7 +1233,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				wsStatusBadge.textContent = "No folder";
 				wsStatusBadge.classList.remove("connected");
 			}
-			if (window.lucide) lucide.createIcons();
+			if (window.lucide) window.lucide.createIcons();
 			return;
 		}
 
@@ -1163,7 +1283,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		}
 		checkStorageQuota();
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	window.requestReauthorization = async function () {
@@ -1193,7 +1313,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (browserSupportMsg) {
 				browserSupportMsg.classList.remove("hidden");
 				if (!isSecure) {
-					browserSupportMsg.innerHTML = `⚠ Folder sync requires a Secure Context. Access via <a href="http://localhost:${location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
+					browserSupportMsg.innerHTML = `⚠ Folder sync requires a Secure Context. Access via <a href="http://localhost:${window.location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
 				}
 			}
 		}
@@ -1461,7 +1581,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function openHelpModal() {
 		if (!helpModalOverlay) return;
 		helpModalOverlay.classList.add("active");
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 		const focusBtn = helpModalOverlay.querySelector(".help-got-it-btn") || helpModalOverlay.querySelector(".help-close-btn");
 		setTimeout(() => { if (focusBtn) focusBtn.focus(); }, 30);
 	}
@@ -1565,7 +1685,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	window.saveWorkspace = async function () {
 		if (!supportsFS) {
 			if (!isSecure) {
-				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${location.port || 8000}.`);
+				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${window.location.port || 8000}.`);
 			} else {
 				showAlertModal("Not supported", "Requires Chrome, Edge, or Brave.");
 			}
@@ -2469,7 +2589,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			tabsListEl.appendChild(tab);
 		});
 
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	// ============================================================
@@ -2487,7 +2607,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 		renderTabs();
 		updateBreadcrumbs();
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	function renderTree(nodes, container, depth) {
@@ -2554,7 +2674,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					const iconWrap = el.querySelector(".icon");
 					if (iconWrap && window.lucide) {
 						iconWrap.innerHTML = `<i data-lucide="${node.isOpen ? 'folder-open' : 'folder'}" size="15"></i>`;
-						lucide.createIcons();
+						window.lucide.createIcons();
 					}
 					const childSubTree = el.nextElementSibling;
 					if (childSubTree && childSubTree.classList.contains("folder-children")) {
@@ -2650,11 +2770,209 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (/^(?:(?:https?|mailto|tel):|\/|\.\/|\.\.\/|#)/i.test(trimmed)) {
 			return trimmed;
 		}
-		// Allow image data URIs
-		if (/^data:image\/(?:png|jpeg|jpg|gif|svg\+xml|webp);base64,[A-Za-z0-9+/=]+$/i.test(trimmed)) {
+		// Allow blob URLs
+		if (/^blob:https?:\/\//i.test(trimmed)) {
+			return trimmed;
+		}
+		// Allow image data URIs (prefix check to avoid catastrophic regex backtracking on large payloads)
+		if (/^data:image\/(?:png|jpeg|jpg|gif|svg\+xml|webp|ico|avif);base64,/i.test(trimmed)) {
 			return trimmed;
 		}
 		return "#";
+	}
+
+	function parseStandaloneImage(str) {
+		if (!str) return null;
+		const t = str.trim();
+		if (!t.startsWith("![") || !t.endsWith(")")) return null;
+		const bracketEnd = t.indexOf("](");
+		if (bracketEnd === -1) return null;
+		const alt = t.slice(2, bracketEnd);
+		if (alt.includes("[") || alt.includes("]")) return null;
+		const url = t.slice(bracketEnd + 2, -1).trim();
+		if (!url) return null;
+		return { alt, url };
+	}
+
+	function replaceMarkdownLinksAndImages(text, sanitizeUrlFn) {
+		if (!text) return "";
+		let result = "";
+		let i = 0;
+		const len = text.length;
+
+		while (i < len) {
+			const isImage = (text[i] === "!" && text[i + 1] === "[");
+			const isLink = (text[i] === "[");
+
+			if (!isImage && !isLink) {
+				result += text[i];
+				i++;
+				continue;
+			}
+
+			const bracketStart = isImage ? i + 1 : i;
+			let bracketDepth = 0;
+			let bracketEnd = -1;
+
+			for (let k = bracketStart; k < len; k++) {
+				if (text[k] === "\n") break;
+				if (text[k] === "[") bracketDepth++;
+				else if (text[k] === "]") {
+					bracketDepth--;
+					if (bracketDepth === 0) {
+						bracketEnd = k;
+						break;
+					}
+				}
+			}
+
+			if (bracketEnd === -1 || bracketEnd + 1 >= len || text[bracketEnd + 1] !== "(") {
+				result += text[i];
+				i++;
+				continue;
+			}
+
+			const rawLabel = text.slice(bracketStart + 1, bracketEnd);
+			let parenDepth = 1;
+			let urlEnd = -1;
+			let j = bracketEnd + 2;
+
+			while (j < len) {
+				const char = text[j];
+				if (char === "\n") break;
+				if (char === "(") {
+					parenDepth++;
+				} else if (char === ")") {
+					parenDepth--;
+					if (parenDepth === 0) {
+						urlEnd = j;
+						break;
+					}
+				}
+				j++;
+			}
+
+			if (urlEnd === -1) {
+				result += text[i];
+				i++;
+				continue;
+			}
+
+			let rawUrl = text.slice(bracketEnd + 2, urlEnd).trim();
+			const titleMatch = rawUrl.match(/^<?([^\s>]+)>?(?:\s+["\x27](.*)["\x27])?$/);
+			const url = titleMatch ? titleMatch[1] : rawUrl;
+			const safeUrl = sanitizeUrlFn ? sanitizeUrlFn(url) : url;
+
+			if (isImage) {
+				if (safeUrl === "#") {
+					result += rawLabel;
+				} else {
+					result += `<img src="${safeUrl}" alt="${rawLabel}" style="max-width:100%; border-radius:6px; margin:4px 0;" />`;
+				}
+			} else {
+				const labelHtml = isImage ? rawLabel : replaceMarkdownLinksAndImages(rawLabel, sanitizeUrlFn);
+				if (safeUrl === "#") {
+					result += `<a href="#" rel="noopener" onclick="return false;">${labelHtml}</a>`;
+				} else {
+					result += `<a href="${safeUrl}" target="_blank" rel="noopener">${labelHtml}</a>`;
+				}
+			}
+
+			i = urlEnd + 1;
+		}
+
+		return result;
+	}
+
+	async function compressDataUrl(dataUrl, maxWidth = 1200, maxHeight = 1200, quality = 0.78) {
+		if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) {
+			return dataUrl;
+		}
+		if (dataUrl.startsWith("data:image/svg+xml")) return dataUrl;
+		if (dataUrl.length < 80 * 1024) return dataUrl; // Already compact
+
+		return new Promise((resolve) => {
+			const img = new Image();
+			img.onload = () => {
+				let { width, height } = img;
+				if (width > maxWidth || height > maxHeight) {
+					const ratio = Math.min(maxWidth / width, maxHeight / height);
+					width = Math.round(width * ratio);
+					height = Math.round(height * ratio);
+				}
+				const canvas = document.createElement("canvas");
+				canvas.width = Math.max(1, width);
+				canvas.height = Math.max(1, height);
+				const ctx = canvas.getContext("2d");
+				ctx.drawImage(img, 0, 0, width, height);
+
+				let result = "";
+				try {
+					result = canvas.toDataURL("image/webp", quality);
+					if (!result.startsWith("data:image/webp")) {
+						result = canvas.toDataURL("image/jpeg", quality);
+					}
+				} catch (_) {
+					try { result = canvas.toDataURL("image/jpeg", quality); } catch (_) { result = dataUrl; }
+				}
+				resolve((result && result.length < dataUrl.length) ? result : dataUrl);
+			};
+			img.onerror = () => resolve(dataUrl);
+			img.src = dataUrl;
+		});
+	}
+
+	async function compressImageFile(file, maxWidth = 1200, maxHeight = 1200, quality = 0.78) {
+		if (!file || !file.type.startsWith("image/")) {
+			return { url: "", caption: file?.name || "image" };
+		}
+		if (file.type === "image/svg+xml") {
+			if (file.size < 150 * 1024) {
+				return new Promise((resolve) => {
+					const reader = new FileReader();
+					reader.onload = () => resolve({ url: reader.result, caption: file.name || "image" });
+					reader.onerror = () => resolve({ url: "", caption: file.name || "image" });
+					reader.readAsDataURL(file);
+				});
+			}
+		}
+		return new Promise((resolve) => {
+			const img = new Image();
+			const url = URL.createObjectURL(file);
+			img.onload = () => {
+				URL.revokeObjectURL(url);
+				let { width, height } = img;
+				if (width > maxWidth || height > maxHeight) {
+					const ratio = Math.min(maxWidth / width, maxHeight / height);
+					width = Math.round(width * ratio);
+					height = Math.round(height * ratio);
+				}
+				const canvas = document.createElement("canvas");
+				canvas.width = Math.max(1, width);
+				canvas.height = Math.max(1, height);
+				const ctx = canvas.getContext("2d");
+				ctx.drawImage(img, 0, 0, width, height);
+
+				let dataUrl = "";
+				try {
+					dataUrl = canvas.toDataURL("image/webp", quality);
+					if (!dataUrl.startsWith("data:image/webp")) {
+						dataUrl = canvas.toDataURL("image/jpeg", quality);
+					}
+				} catch (_) {
+					try { dataUrl = canvas.toDataURL("image/jpeg", quality); } catch (_) { dataUrl = ""; }
+				}
+				resolve({ url: dataUrl, caption: file.name || "image" });
+			};
+			img.onerror = () => {
+				URL.revokeObjectURL(url);
+				const reader = new FileReader();
+				reader.onload = () => resolve({ url: reader.result, caption: file.name || "image" });
+				reader.onerror = () => resolve({ url: "", caption: file.name || "image" });
+				reader.readAsDataURL(file);
+			};
+			img.src = url;
+		});
 	}
 
 	function textToBlocks(text) {
@@ -2725,14 +3043,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 
 			// Standalone image: ![alt](url)
-			const imgMatch = t.match(/^!\[([^\]]*)\]\(((?:[^()]+|\([^()]*\)+))\)$/);
-			if (imgMatch) {
+			const standaloneImg = parseStandaloneImage(t);
+			if (standaloneImg) {
 				listStack = [];
 				blocks.push({
 					type: "image",
 					data: {
-						url: imgMatch[2],
-						caption: md2h(imgMatch[1])
+						url: standaloneImg.url,
+						caption: md2h(standaloneImg.alt)
 					}
 				});
 				continue;
@@ -2827,22 +3145,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 		res = res.replace(/&lt;mark(?: class="cdx-marker")?&gt;(.*?)&lt;\/mark&gt;/gi, '<mark class="cdx-marker">$1</mark>');
 		// Markdown highlight syntax: ==text== -> <mark class="cdx-marker">text</mark>
 		res = res.replace(/==([^=]+)==/g, '<mark class="cdx-marker">$1</mark>');
-		// Convert Markdown image links ![alt](url)
-		res = res.replace(/!\[([^\]]*)\]\(((?:[^()]+|\([^()]*\))+)\)/g, (match, alt, url) => {
-			const safeUrl = sanitizeUrl(url);
-			if (safeUrl === "#") return alt;
-			return `<img src="${safeUrl}" alt="${alt}" style="max-width:100%; border-radius:6px; margin:4px 0;" />`;
+		// Convert Markdown image and link tags safely without ReDoS
+		res = replaceMarkdownLinksAndImages(res, sanitizeUrl);
+
+		// Protect all HTML tags so inline formatting never modifies attributes (e.g. href or src containing underscores)
+		const tagPlaceholders = [];
+		res = res.replace(/<[^>]+>/g, (tag) => {
+			const id = "\x00" + tagPlaceholders.length + "\x01";
+			tagPlaceholders.push(tag);
+			return id;
 		});
-		// Convert Markdown links [text](url) -> <a href="url" target="_blank" rel="noopener">text</a>
-		res = res.replace(/\[([^\]]+)\]\(((?:[^()]+|\([^()]*\))+)\)/g, (match, text, url) => {
-			const safeUrl = sanitizeUrl(url);
-			if (safeUrl === "#") return `<a href="#" rel="noopener" onclick="return false;">${text}</a>`;
-			return `<a href="${safeUrl}" target="_blank" rel="noopener">${text}</a>`;
-		});
+
 		// Convert bold, italic, code
 		res = res.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/__(.*?)__/g, "<b>$1</b>")
 			.replace(/\*(.*?)\*/g, "<i>$1</i>").replace(/_(.*?)_/g, "<i>$1</i>")
 			.replace(/`(.*?)`/g, "<code>$1</code>");
+
+		// Restore protected HTML tags
+		if (tagPlaceholders.length) {
+			res = res.replace(/\x00(\d+)\x01/g, (_, idx) => tagPlaceholders[Number(idx)]);
+		}
+
 		return res;
 	}
 
@@ -2962,13 +3285,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 	async function initOrUpdateEditorJs(content) {
 		const blocks = textToBlocks(content);
 		if (editorInstance) {
-			try { await editorInstance.isReady; await editorInstance.render({ blocks }); return; }
-			catch (e) { try { editorInstance.destroy(); } catch (_) { } editorInstance = null; }
+			try {
+				await editorInstance.isReady;
+				await editorInstance.render({ blocks });
+				return;
+			} catch (e) {
+				try { editorInstance.destroy(); } catch (_) { }
+				editorInstance = null;
+			}
 		}
-		createEditorJsInstance(blocks);
+		await createEditorJsInstance(blocks);
 	}
 
-	function createEditorJsInstance(blocks) {
+	async function createEditorJsInstance(blocks) {
 		if (typeof EditorJS === "undefined") return;
 		editorjsWrapper.innerHTML = "";
 		const holder = document.createElement("div");
@@ -3065,20 +3394,113 @@ document.addEventListener("DOMContentLoaded", async () => {
 						title: "Image"
 					};
 				}
+				async onDropHandler(file) {
+					return compressImageFile(file);
+				}
+				async onPaste(e) {
+					switch (e.type) {
+						case "tag": {
+							const src = e.detail?.data?.src || "";
+							if (src.startsWith("data:image/")) {
+								const compressed = await compressDataUrl(src);
+								this.data = { url: compressed };
+							} else {
+								this.data = { url: src };
+							}
+							break;
+						}
+						case "pattern": {
+							this.data = { url: e.detail?.data || "" };
+							break;
+						}
+						case "file": {
+							const file = e.detail?.file;
+							if (file) {
+								const res = await this.onDropHandler(file);
+								this.data = res;
+							}
+							break;
+						}
+						default:
+							super.onPaste(e);
+					}
+				}
+				_acceptTuneView() {
+					this.tunes.forEach(tune => {
+						if (this.nodes?.imageHolder) {
+							const cls = this.CSS.imageHolder + "--" + tune.name.replace(/([A-Z])/g, t => `-${t[0].toLowerCase()}`);
+							this.nodes.imageHolder.classList.toggle(cls, !!this.data[tune.name]);
+						}
+						if (tune.name === "stretched") {
+							const block = (typeof this.api?.blocks?.getBlockByIndex === "function")
+								? (this.api.blocks.getBlockByIndex(this.blockIndex) || this.api.blocks.getBlockByIndex(this.api.blocks.getCurrentBlockIndex()))
+								: null;
+							if (block && typeof block.stretched !== "undefined") {
+								block.stretched = !!this.data.stretched;
+							}
+						}
+					});
+				}
 				render() {
 					const container = super.render();
+
+					// Add error and timeout handling so image never spins forever
+					const attachErrorHandler = () => {
+						if (!this.nodes?.image) return;
+						const imgEl = this.nodes.image;
+
+						const showError = () => {
+							const loader = container.querySelector(`.${this.CSS.loading}`);
+							if (loader) loader.remove();
+							container.classList.remove(this.CSS.loading);
+
+							if (!container.querySelector(".ce-image-error-box")) {
+								const errorBox = document.createElement("div");
+								errorBox.className = "ce-image-error-box";
+								errorBox.style.cssText = "display:flex; align-items:center; gap:8px; padding:10px 14px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:var(--text-danger, #ef4444); font-size:12px; margin:8px 0;";
+								const displayUrl = (this.data.url || "").length > 60 ? (this.data.url.slice(0, 60) + "…") : (this.data.url || "image");
+								errorBox.innerHTML = `
+									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="14" y2="16"/></svg>
+									<span>Unable to load image: <code style="font-size:11px; word-break:break-all;">${escHtml(displayUrl)}</code></span>
+								`;
+								container.appendChild(errorBox);
+							}
+							if (this.nodes.caption && !container.contains(this.nodes.caption)) {
+								container.appendChild(this.nodes.caption);
+							}
+						};
+
+						imgEl.addEventListener("error", showError);
+
+						if (this.data.url) {
+							// Set a fallback timeout of 7 seconds to avoid endless spinner on hanging connections
+							const timeoutId = setTimeout(() => {
+								const loader = container.querySelector(`.${this.CSS.loading}`);
+								if (loader) showError();
+							}, 7000);
+							imgEl.addEventListener("load", () => {
+								clearTimeout(timeoutId);
+								container.querySelector(".ce-image-error-box")?.remove();
+							}, { once: true });
+						}
+					};
+
+					attachErrorHandler();
+
 					if (!this.data.url) {
 						const urlInput = document.createElement("input");
 						urlInput.className = "cdx-input ce-image-url-input";
 						urlInput.placeholder = "Paste image URL and press Enter…";
 						urlInput.style.cssText = "margin-bottom: 8px;";
-						urlInput.addEventListener("keydown", (e) => {
+						urlInput.addEventListener("keydown", async (e) => {
 							if (e.key === "Enter") {
 								e.preventDefault();
 								const val = urlInput.value.trim();
 								if (val) {
-									this.data = { url: val, caption: this.data.caption || "" };
+									const finalUrl = val.startsWith("data:image/") ? await compressDataUrl(val) : val;
+									this.data = { url: finalUrl, caption: this.data.caption || "" };
 									urlInput.remove();
+									attachErrorHandler();
 								}
 							}
 						});
@@ -3159,6 +3581,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		});
 		window.editorInstance = editorInstance;
+		try {
+			await editorInstance.isReady;
+		} catch (e) {
+			console.warn("[KeepLocal] editorInstance.isReady error:", e);
+		}
 	}
 
 	async function loadFile() {
@@ -3201,17 +3628,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (editorMode === "block" && isMarkdown) {
 				editorjsWrapper.classList.remove("hidden");
 				plainWrapper.classList.add("hidden");
-				await initOrUpdateEditorJs(text);
+				showEditorLoading("Loading note…");
+				try {
+					await initOrUpdateEditorJs(text);
+				} catch (err) {
+					console.warn("[KeepLocal] Error initializing block editor, falling back to Plain mode:", err);
+					editorMode = "plain";
+					updateEditorModeUI();
+					plainWrapper.classList.remove("hidden");
+					editorjsWrapper.classList.add("hidden");
+				} finally {
+					hideEditorLoading();
+				}
 			} else {
+				hideEditorLoading();
 				plainWrapper.classList.remove("hidden");
 				editorjsWrapper.classList.add("hidden");
 			}
 			editorLoadedFileId = file.id;
 			if (editorStatusSpan) editorStatusSpan.textContent = (editorMode === "block" && isMarkdown) ? "Block Mode" : "Raw Text";
 		} else {
+			hideEditorLoading();
 			if (editorEmptyState) {
 				editorEmptyState.classList.remove("hidden");
-				if (window.lucide) lucide.createIcons();
+				if (window.lucide) window.lucide.createIcons();
 			}
 			editorjsWrapper?.classList.add("hidden");
 			plainWrapper?.classList.add("hidden");
@@ -3228,7 +3668,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		isInitEditor = false;
 		updateLineNumbers();
 		updateBreadcrumbs();
-		updateCodeHighlighting();
+		if (editorMode === "plain") {
+			updateCodeHighlighting();
+		}
 	}
 
 	// function updateCodeHighlighting() {
@@ -3306,6 +3748,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	// Sync overlay scroll
 	function updateCodeHighlighting() {
+		if (editorMode !== "plain") return;
 		const codeEl = document.getElementById("codeHighlightContent");
 		const preEl = document.getElementById("codeHighlightPre");
 
@@ -3356,6 +3799,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		let val = editorTextarea.value;
 		if (val.endsWith("\n")) val += " ";
+
+		// If document contains large base64 images, mask them for Prism display so regex never freezes
+		if (val.length > 40 * 1024 && val.includes("data:image/")) {
+			val = val.replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]{80,}/g, "data:image/...;base64,[image-data]");
+		}
+
 		codeEl.textContent = val;
 
 		const computed = getComputedStyle(editorTextarea);
@@ -3372,6 +3821,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (lineNumbersEl) {
 			lineNumbersEl.style.lineHeight = computed.lineHeight;
 		}
+
+		// Don't run heavy Prism regex on massive documents (>250KB) to ensure silky-smooth typing
+		if (val.length > 250 * 1024) return;
 
 		if (typeof Prism !== "undefined") {
 			try {
@@ -3720,18 +4172,60 @@ document.addEventListener("DOMContentLoaded", async () => {
 	theme = globalTheme;
 	document.body.setAttribute("data-theme", theme);
 
-	// Check for last active workspace or show welcome screen
-	const lastActiveWsId = localStorage.getItem("keeplocal_active_ws_id");
-	const targetWs = workspaces.find(w => w.id === lastActiveWsId);
+	// Parse initial route (supports #/workspaces, ?view=workspaces, ?safe=1, /workspaces, #/workspace/:id)
+	function getInitialRoute() {
+		const hash = (window.location.hash || "").replace(/^#\/?/, "").toLowerCase();
+		const search = new URLSearchParams(window.location.search);
+		const viewParam = (search.get("view") || "").toLowerCase();
+		const isSafe = search.has("safe") || search.has("recovery");
+		const path = window.location.pathname.toLowerCase();
 
-	if (targetWs) {
-		await openWorkspace(targetWs.id);
-	} else if (workspaces.length > 0) {
-		const sorted = [...workspaces].sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
-		await openWorkspace(sorted[0].id);
-	} else {
-		showWelcome();
+		if (isSafe || viewParam === "workspaces" || hash === "workspaces" || path.endsWith("/workspaces")) {
+			return { view: "workspaces" };
+		}
+		if (hash.startsWith("workspace/")) {
+			const wsId = window.location.hash.replace(/^#\/?workspace\//i, "").trim();
+			return { view: "editor", wsId };
+		}
+		return null;
 	}
+
+	const initialRoute = getInitialRoute();
+
+	if (initialRoute?.view === "workspaces") {
+		try { localStorage.removeItem("keeplocal_active_ws_id"); } catch (_) { }
+		showWelcome();
+	} else if (initialRoute?.view === "editor" && initialRoute.wsId) {
+		const targetWs = workspaces.find(w => w.id === initialRoute.wsId);
+		if (targetWs) {
+			await openWorkspace(targetWs.id);
+		} else {
+			showWelcome();
+		}
+	} else {
+		// Check for last active workspace or show welcome screen
+		const lastActiveWsId = localStorage.getItem("keeplocal_active_ws_id");
+		const targetWs = workspaces.find(w => w.id === lastActiveWsId);
+
+		if (targetWs) {
+			await openWorkspace(targetWs.id);
+		} else {
+			showWelcome();
+		}
+	}
+
+	// Listen for route changes (e.g. Back/Forward browser navigation)
+	window.addEventListener("hashchange", () => {
+		const currentHash = (window.location.hash || "").replace(/^#\/?/, "").toLowerCase();
+		if (currentHash === "workspaces" && activeWsId) {
+			goHome();
+		} else if (currentHash.startsWith("workspace/")) {
+			const wsId = window.location.hash.replace(/^#\/?workspace\//i, "").trim();
+			if (wsId && wsId !== activeWsId) {
+				openWorkspace(wsId);
+			}
+		}
+	});
 
 	// First time visit: show product onboarding & help modal
 	const hasSeenHelp = localStorage.getItem("keeplocal_help_seen");

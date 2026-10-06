@@ -1,0 +1,10 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  # Allow existing physical files and directories to be served directly
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+  # Rewrite /workspaces and other routes to index.html for client-side routing
+  RewriteRule ^ index.html [L]
+</IfModule>

@@ -3,7 +3,7 @@
    Offline caching for local-first note taking (ARCH-01)
    ============================================================ */
 
-const CACHE_NAME = 'keeplocal-v2';
+const CACHE_NAME = 'keeplocal-v6';
 
 const STATIC_ASSETS = [
 	'./',
@@ -88,7 +88,7 @@ self.addEventListener('fetch', (event) => {
 				.catch((err) => {
 					// Network failed (offline)
 					if (cachedResponse) return cachedResponse;
-					throw err;
+					return new Response('', { status: 408, statusText: 'Network Failed or Offline' });
 				});
 
 			return cachedResponse || fetchPromise;
