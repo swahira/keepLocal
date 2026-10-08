@@ -250,6 +250,7 @@
 		res = res.replace(/==([^=]+)==/g, '<mark class="cdx-marker">$1</mark>');
 		res = replaceMarkdownLinksAndImages(res, sanitizeUrl);
 
+		// Mask HTML tags to avoid corrupting attributes
 		const tagPlaceholders = [];
 		res = res.replace(/<[^>]+>/g, (tag) => {
 			const id = "\x00" + tagPlaceholders.length + "\x01";
@@ -257,10 +258,25 @@
 			return id;
 		});
 
-		res = res.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/__(.*?)__/g, "<b>$1</b>")
-			.replace(/\*(.*?)\*/g, "<i>$1</i>").replace(/_(.*?)_/g, "<i>$1</i>")
-			.replace(/`(.*?)`/g, "<code>$1</code>");
+		// Mask inline code first so asterisks/underscores inside backticks are never parsed as emphasis
+		const codePlaceholders = [];
+		res = res.replace(/`([^`]+)`/g, (_, code) => {
+			const id = "\x02" + codePlaceholders.length + "\x03";
+			codePlaceholders.push(`<code>${code}</code>`);
+			return id;
+		});
 
+		// Apply bold and italics (with non-whitespace boundary guards to prevent parsing math e.g. a * b * c)
+		res = res.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/__(.*?)__/g, "<b>$1</b>")
+			.replace(/(^|[\s.,!?;:()\[\]{}'"])\*(\S(?:.*?\S)?)\*(?=[\s.,!?;:()\[\]{}'"]|$)/g, "$1<i>$2</i>")
+			.replace(/(^|[\s.,!?;:()\[\]{}'"])_(\S(?:.*?\S)?)_(?=[\s.,!?;:()\[\]{}'"]|$)/g, "$1<i>$2</i>");
+
+		// Restore inline code
+		if (codePlaceholders.length) {
+			res = res.replace(/\x02(\d+)\x03/g, (_, idx) => codePlaceholders[Number(idx)]);
+		}
+
+		// Restore HTML tags
 		if (tagPlaceholders.length) {
 			res = res.replace(/\x00(\d+)\x01/g, (_, idx) => tagPlaceholders[Number(idx)]);
 		}
@@ -284,7 +300,12 @@
 			.replace(/<i>(.*?)<\/i>/gi, "*$1*").replace(/<em>(.*?)<\/em>/gi, "*$1*")
 			.replace(/<code[^>]*>(.*?)<\/code>/gi, "`$1`")
 			.replace(/<br\s*\/?>/gi, "\n")
-			.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+			.replace(/&nbsp;/g, " ")
+			.replace(/&(?:#39|#039);/g, "'")
+			.replace(/&amp;/g, "&")
+			.replace(/&lt;/g, "<")
+			.replace(/&gt;/g, ">")
+			.replace(/&quot;/g, '"')
 			.replace(/<[^>]+>/g, "")
 			.replace(/%%%U_OPEN%%%/g, "<u>").replace(/%%%U_CLOSE%%%/g, "</u>");
 	}
@@ -382,7 +403,8 @@
 					type: "warning",
 					data: {
 						title: alertTitle,
-						message: ""
+						message: "",
+						alertType: alertType
 					}
 				});
 			}
@@ -398,9 +420,9 @@
 					blocks.push({ type: "quote", data: { text: quoteText, caption: "" } });
 				}
 			}
-			else if (t.startsWith("- [ ] ") || t.startsWith("- [x] ")) {
+			else if (t.startsWith("- [ ] ") || t.startsWith("- [x] ") || t.startsWith("- [X] ")) {
 				listStack = [];
-				const checked = t.startsWith("- [x] ");
+				const checked = t.startsWith("- [x] ") || t.startsWith("- [X] ");
 				const itemText = md2h(t.slice(6));
 				const last = blocks[blocks.length - 1];
 				if (last?.type === "checklist") {
@@ -478,12 +500,14 @@
 					break;
 				}
 				case "warning": {
-					const title = h2md(b.data.title || "").trim();
-					const msg = h2md(b.data.message || "").trim();
-					if (title && title.toLowerCase() !== "note") {
-						lines.push(`> [!NOTE] ${title}`);
+					const alertType = (b.data?.alertType || "NOTE").toUpperCase();
+					const defaultTitle = alertType.charAt(0) + alertType.slice(1).toLowerCase();
+					const title = h2md(b.data?.title || "").trim();
+					const msg = h2md(b.data?.message || "").trim();
+					if (title && title.toLowerCase() !== defaultTitle.toLowerCase() && title.toLowerCase() !== "note") {
+						lines.push(`> [!${alertType}] ${title}`);
 					} else {
-						lines.push(`> [!NOTE]`);
+						lines.push(`> [!${alertType}]`);
 					}
 					if (msg) {
 						msg.split("\n").forEach(l => lines.push(`> ${l}`));
@@ -530,7 +554,7 @@
 					if (content.length) {
 						content.forEach((row, idx) => {
 							lines.push("| " + row.map(c => h2md(c)).join(" | ") + " |");
-							if (idx === 0) {
+							if (idx === 0 && b.data.withHeadings !== false) {
 								lines.push("| " + row.map(() => "---").join(" | ") + " |");
 							}
 						});

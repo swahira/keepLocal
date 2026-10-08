@@ -339,7 +339,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const c = await KeepLocalDB.getConfig(wsId);
 			const sidebar = document.querySelector(".sidebar");
 			if (c) {
-				theme = c.theme || "dark";
+				const globalTheme = localStorage.getItem("keeplocal_global_theme");
+				theme = globalTheme || c.theme || "dark";
 				fontSize = Number.isFinite(Number(c.fontSize))
 					? Number(c.fontSize)
 					: 13;
@@ -1482,16 +1483,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 			// modalCb will have changed — don't hide that new modal.
 			if (modalCb === cb) hideModal();
 		}
-		if (e.key === "Escape") hideModal();
+		if (e.key === "Escape") {
+			if (modalCb) modalCb(false);
+			hideModal();
+		}
 	});
 	modalConfirmBtn.onclick = () => { if (modalCb) modalCb(true); hideModal(); };
-	modalCancelBtn.onclick = () => hideModal();
-	modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) hideModal(); });
+	modalCancelBtn.onclick = () => { if (modalCb) modalCb(false); hideModal(); };
+	modalOverlay.addEventListener("click", (e) => {
+		if (e.target === modalOverlay) {
+			if (modalCb) modalCb(false);
+			hideModal();
+		}
+	});
 
 	document.addEventListener("keydown", (e) => {
 		if (!modalOverlay.classList.contains("active")) return;
 		if (e.key === "Escape") {
 			e.preventDefault();
+			if (modalCb) modalCb(false);
 			hideModal();
 			return;
 		}
@@ -2177,7 +2187,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const pathParts = fullPath.slice(0, -1).map(x => x.name);
 			queueDiskDeletion(pathParts, n.name);
 			n.name = newName;
-			delete n._diskContent;
+			const clearDiskContent = (node) => {
+				delete node._diskContent;
+				if (node.children) node.children.forEach(clearDiskContent);
+			};
+			clearDiskContent(n);
 			persistCurrent(); syncWorkspace(); render();
 			if (selectedId === id && n.type === "file") {
 				loadFile();
@@ -2611,13 +2625,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			el.onclick = async (e) => {
 				if (e.target.closest(".action-btn")) return;
 				if (node.type === "folder") {
-					if (selectedId && selectedId !== node.id) {
-						await autoSaveCurrentFile();
-					}
 					node.isOpen = !node.isOpen;
-					selectedId = node.id;
-					document.querySelectorAll(".file-item.active").forEach(x => x.classList.remove("active"));
-					el.classList.add("active");
 					persistCurrent();
 					// In-place DOM toggle without full tree re-render
 					const iconWrap = el.querySelector(".icon");
@@ -2631,7 +2639,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 					} else {
 						render();
 					}
-					updateBreadcrumbs();
 				} else {
 					await openTab(node.id);
 				}
@@ -2697,8 +2704,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (n.type === "file") {
 					await openTab(n.id);
 				} else {
-					if (selectedId) await autoSaveCurrentFile();
-					selectedId = n.id;
+					n.isOpen = true;
 					persistCurrent();
 					render();
 				}
@@ -3608,7 +3614,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// BEFOREUNLOAD FLUSH
 	// ============================================================
-	window.addEventListener("beforeunload", () => {
+	window.addEventListener("beforeunload", (e) => {
+		if (editorSaveTimer !== null) {
+			e.preventDefault();
+			e.returnValue = "";
+		}
 		const targetId = (findNode(files, selectedId)?.type === "file") ? selectedId : editorLoadedFileId;
 		if (targetId && editorTextarea) {
 			const f = findNode(files, targetId);

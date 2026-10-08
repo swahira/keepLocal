@@ -99,14 +99,34 @@
 				return reject(err);
 			}
 
+			let requestResult;
+			let isResolved = false;
+
 			if (result && typeof result.onsuccess !== "undefined") {
-				result.onsuccess = (e) => resolve(e.target.result);
-				result.onerror = (e) => reject(e.target.error);
-			} else {
-				tx.oncomplete = () => resolve(result);
-				tx.onerror = (e) => reject(e.target.error);
-				tx.onabort = (e) => reject(e.target.error || new Error("Transaction aborted"));
+				result.onsuccess = (e) => {
+					requestResult = e.target.result;
+					if (mode === "readonly") {
+						isResolved = true;
+						resolve(requestResult);
+					}
+				};
+				result.onerror = (e) => {
+					if (!isResolved) reject(e.target.error);
+				};
 			}
+
+			tx.oncomplete = () => {
+				if (!isResolved) {
+					isResolved = true;
+					resolve(typeof requestResult !== "undefined" ? requestResult : result);
+				}
+			};
+			tx.onerror = (e) => {
+				if (!isResolved) reject(e.target.error);
+			};
+			tx.onabort = (e) => {
+				if (!isResolved) reject(e.target.error || new Error("Transaction aborted"));
+			};
 		});
 	}
 

@@ -79,16 +79,23 @@ assert.strictEqual(imgBlocks[0].data.caption, "Test");
 // Alert
 const alertBlocks = KeepLocalMarkdown.textToBlocks("> [!WARNING] Danger Ahead\n> Be careful!");
 assert.strictEqual(alertBlocks[0].type, "warning");
+assert.strictEqual(alertBlocks[0].data.alertType, "WARNING");
 assert.ok(alertBlocks[0].data.title.includes("Danger Ahead"));
 assert.ok(alertBlocks[0].data.message.includes("Be careful!"));
 
-// Checklist
-const checkBlocks = KeepLocalMarkdown.textToBlocks("- [ ] Todo item\n- [x] Done item");
+const alertRoundtrip = KeepLocalMarkdown.blocksToText({ blocks: alertBlocks });
+assert.ok(alertRoundtrip.includes("> [!WARNING] Danger Ahead"));
+assert.ok(alertRoundtrip.includes("> Be careful!"));
+
+// Checklist (including uppercase [X])
+const checkBlocks = KeepLocalMarkdown.textToBlocks("- [ ] Todo item\n- [x] Done item\n- [X] Upper done item");
 assert.strictEqual(checkBlocks[0].type, "checklist");
 assert.strictEqual(checkBlocks[0].data.items[0].checked, false);
 assert.strictEqual(checkBlocks[0].data.items[0].text, "Todo item");
 assert.strictEqual(checkBlocks[0].data.items[1].checked, true);
 assert.strictEqual(checkBlocks[0].data.items[1].text, "Done item");
+assert.strictEqual(checkBlocks[0].data.items[2].checked, true);
+assert.strictEqual(checkBlocks[0].data.items[2].text, "Upper done item");
 
 // Code block
 const codeBlocks = KeepLocalMarkdown.textToBlocks("```javascript\nconst x = 42;\n```");
@@ -96,11 +103,25 @@ assert.strictEqual(codeBlocks[0].type, "code");
 assert.strictEqual(codeBlocks[0].data.language, "javascript");
 assert.strictEqual(codeBlocks[0].data.code, "const x = 42;");
 
-// Table
+// Inline code with asterisks and math isolation in md2h
+const inlineCodeHtml = KeepLocalMarkdown.md2h("Check `const a = b * c;` for errors");
+assert.ok(inlineCodeHtml.includes("<code>const a = b * c;</code>"));
+assert.ok(!inlineCodeHtml.includes("<i>"));
+
+const mathFormulaHtml = KeepLocalMarkdown.md2h("Formula: x * y * z = 100");
+assert.ok(!mathFormulaHtml.includes("<i>"));
+
+// Table with headings
 const tableBlocks = KeepLocalMarkdown.textToBlocks("| Header 1 | Header 2 |\n| --- | --- |\n| Cell 1 | Cell 2 |");
 assert.strictEqual(tableBlocks[0].type, "table");
 assert.strictEqual(tableBlocks[0].data.withHeadings, true);
 assert.deepStrictEqual(tableBlocks[0].data.content, [["Header 1", "Header 2"], ["Cell 1", "Cell 2"]]);
+
+// Table without headings
+const tableNoHeaderMd = KeepLocalMarkdown.blocksToText({
+	blocks: [{ type: "table", data: { content: [["A", "B"], ["C", "D"]], withHeadings: false } }]
+});
+assert.ok(!tableNoHeaderMd.includes("| --- | --- |"));
 
 console.log("✓ textToBlocks tests passed");
 
@@ -108,7 +129,7 @@ console.log("✓ textToBlocks tests passed");
 const roundtripMd = KeepLocalMarkdown.blocksToText({
 	blocks: [
 		{ type: "header", data: { level: 2, text: "Section 2" } },
-		{ type: "paragraph", data: { text: "Some normal text with <b>bold</b> and <i>italic</i>" } },
+		{ type: "paragraph", data: { text: "It&#39;s a test with <b>bold</b> and <i>italic</i>" } },
 		{ type: "delimiter", data: {} },
 		{ type: "checklist", data: { items: [{ text: "Buy milk", checked: false }, { text: "Walk dog", checked: true }] } },
 		{ type: "code", data: { language: "py", code: "print('hello')" } }
@@ -116,7 +137,8 @@ const roundtripMd = KeepLocalMarkdown.blocksToText({
 });
 
 assert.ok(roundtripMd.includes("## Section 2"));
-assert.ok(roundtripMd.includes("Some normal text with **bold** and *italic*"));
+assert.ok(roundtripMd.includes("It's a test with **bold** and *italic*"));
+assert.ok(!roundtripMd.includes("&#39;"));
 assert.ok(roundtripMd.includes("---"));
 assert.ok(roundtripMd.includes("- [ ] Buy milk"));
 assert.ok(roundtripMd.includes("- [x] Walk dog"));
