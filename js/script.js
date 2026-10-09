@@ -620,14 +620,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	window.createNewWorkspace = function () {
 		showInputModal("Workspace name", "My Notes", async (name) => {
-			if (!name) return;
-			if (wsNameExists(name)) {
-				showAlertModal("Duplicate name", `A workspace named "${name}" already exists. Please choose a different name.`);
+			const trimmed = (name || "").trim();
+			if (!trimmed) return;
+			if (wsNameExists(trimmed)) {
+				showAlertModal("Duplicate name", `A workspace named "${trimmed}" already exists. Please choose a different name.`);
 				return;
 			}
 			const ws = {
 				id: uid("ws"),
-				name,
+				name: trimmed,
 				createdAt: Date.now(),
 				lastOpenedAt: Date.now(),
 				folderName: null,
@@ -761,6 +762,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 	};
 
+	function resolveSafeZipPath(rawPath) {
+		return KeepLocalMarkdown ? KeepLocalMarkdown.resolveSafeZipPath(rawPath) : [];
+	}
+
 	window.importZipOnWelcome = function () {
 		document.getElementById("welcomeImportInput").click();
 	};
@@ -782,17 +787,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 				fileEntries.push({ path: normalized, entry });
 			});
 
-			// Synchronously build folder hierarchy to prevent race conditions (ZIP-01, ZIP-02)
+			// Synchronously build folder hierarchy to prevent race conditions (ZIP-01, ZIP-02, AUDIT-12)
 			for (const { path } of fileEntries) {
-				const parts = path.split("/");
+				const parts = resolveSafeZipPath(path);
 				const fname = parts.pop();
 				if (!fname) continue;
 				let arr = importedFiles, curPath = "";
 				for (const dir of parts) {
-					if (!dir) continue;
 					const fp = curPath ? `${curPath}/${dir}` : dir;
 					if (!folders[fp]) {
-						let existingFolder = arr.find(n => n.type === "folder" && n.name === dir);
+						let existingFolder = arr.find(n => n.type === "folder" && n.name.toLowerCase() === dir.toLowerCase());
 						if (!existingFolder) {
 							existingFolder = { id: uid("folder"), name: dir, type: "folder", isOpen: true, children: [] };
 							arr.push(existingFolder);
@@ -807,14 +811,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 			// Asynchronously read all file contents
 			await Promise.all(fileEntries.map(async ({ path, entry }) => {
 				const content = await entry.async("string");
-				const parts = path.split("/");
+				const parts = resolveSafeZipPath(path);
 				const fname = parts.pop();
 				if (!fname) return;
-				const dirPath = parts.filter(Boolean).join("/");
+				const dirPath = parts.join("/");
 				const arr = folders[dirPath] || importedFiles;
-				if (!nameExistsInArray(arr, fname)) {
-					arr.push({ id: uid("file"), name: fname, type: "file", content });
-				}
+				const safeName = uniqueNodeName(arr, fname);
+				arr.push({ id: uid("file"), name: safeName, type: "file", content });
 			}));
 
 			// Only instantiate and persist workspace after successful load (ZIP-03)
@@ -845,14 +848,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const ws = workspaces.find(w => w.id === wsId);
 		if (!ws) return;
 		showInputModal("Rename workspace", ws.name, (name) => {
-			if (!name || name === ws.name) return;
-			if (wsNameExists(name, wsId)) {
-				showAlertModal("Duplicate name", `A workspace named "${name}" already exists. Please choose a different name.`);
+			const trimmed = (name || "").trim();
+			if (!trimmed || trimmed === ws.name) return;
+			if (wsNameExists(trimmed, wsId)) {
+				showAlertModal("Duplicate name", `A workspace named "${trimmed}" already exists. Please choose a different name.`);
 				return;
 			}
-			ws.name = name;
+			ws.name = trimmed;
 			saveWorkspaceMeta();
 			renderWorkspaceCards();
+			if (wsId === activeWsId) {
+				if (sidebarWsName) sidebarWsName.textContent = trimmed;
+				document.title = `${trimmed} – KeepLocal`;
+			}
 		});
 	};
 
@@ -867,6 +875,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 				workspaces = workspaces.filter(w => w.id !== wsId);
 				deleteWsData(wsId);
 				saveWorkspaceMeta();
+				if (localStorage.getItem("keeplocal_active_ws_id") === wsId) {
+					localStorage.removeItem("keeplocal_active_ws_id");
+				}
+				if (activeWsId === wsId) {
+					activeWsId = null;
+					workspaceHandle = null;
+					fsPermissionGranted = false;
+					files = [];
+					selectedId = null;
+					openTabs = [];
+					editorLoadedFileId = null;
+					pendingDeletions = [];
+					if (editorInstance) {
+						try { editorInstance.destroy(); } catch (_) { }
+						editorInstance = null;
+					}
+					showWelcome();
+				}
 				renderWorkspaceCards();
 			},
 			true
@@ -991,6 +1017,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		fsPermissionGranted = false;
 		files = [];
 		selectedId = null;
+		openTabs = [];
 		editorLoadedFileId = null;
 		pendingDeletions = [];
 		// Destroy editor instance to avoid memory leak
@@ -1977,9 +2004,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			if (syncPending) {
 				syncPending = false;
-				performDiskSync().then(() => {
-					waiters.forEach(res => res());
-				});
+				performDiskSync()
+					.catch(err => {
+						console.warn("Subsequent sync error:", err);
+					})
+					.finally(() => {
+						waiters.forEach(res => res());
+					});
 			} else {
 				waiters.forEach(res => res());
 			}
@@ -2213,7 +2244,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const zip = new JSZip();
 		addToZip(zip, files);
 		const blob = await zip.generateAsync({ type: "blob" });
-		downloadBlob(blob, `${sidebarWsName?.textContent || "export"}.zip`);
+		const exportName = (sidebarWsName?.textContent || "export").replace(/[/\\:*?"<>|]/g, "_").trim() || "export";
+		downloadBlob(blob, `${exportName}.zip`);
 	};
 	window.exportFolder = async function (id) {
 		await autoSaveCurrentFile();
@@ -2222,7 +2254,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const zip = new JSZip();
 		addToZip(zip.folder(n.name), n.children);
 		const blob = await zip.generateAsync({ type: "blob" });
-		downloadBlob(blob, `${n.name}.zip`);
+		const folderName = (n.name || "folder").replace(/[/\\:*?"<>|]/g, "_").trim() || "folder";
+		downloadBlob(blob, `${folderName}.zip`);
 	};
 	function addToZip(zipObj, nodes) {
 		for (const n of nodes) {
@@ -2260,17 +2293,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 				fileEntries.push({ path: normalized, entry });
 			});
 
-			// Synchronously build folder hierarchy to prevent race conditions (ZIP-01, ZIP-02)
+			// Synchronously build folder hierarchy to prevent race conditions (ZIP-01, ZIP-02, AUDIT-12)
 			for (const { path } of fileEntries) {
-				const parts = path.split("/");
+				const parts = resolveSafeZipPath(path);
 				const fname = parts.pop();
 				if (!fname) continue;
 				let arr = files, curPath = "";
 				for (const dir of parts) {
-					if (!dir) continue;
 					const fp = curPath ? `${curPath}/${dir}` : dir;
 					if (!folders[fp]) {
-						let existingFolder = arr.find(n => n.type === "folder" && n.name === dir);
+						let existingFolder = arr.find(n => n.type === "folder" && n.name.toLowerCase() === dir.toLowerCase());
 						if (!existingFolder) {
 							existingFolder = { id: uid("folder"), name: dir, type: "folder", isOpen: true, children: [] };
 							arr.push(existingFolder);
@@ -2285,14 +2317,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 			// Asynchronously read all file contents
 			await Promise.all(fileEntries.map(async ({ path, entry }) => {
 				const content = await entry.async("string");
-				const parts = path.split("/");
+				const parts = resolveSafeZipPath(path);
 				const fname = parts.pop();
 				if (!fname) return;
-				const dirPath = parts.filter(Boolean).join("/");
+				const dirPath = parts.join("/");
 				const arr = folders[dirPath] || files;
-				if (!nameExistsInArray(arr, fname)) {
-					arr.push({ id: uid("file"), name: fname, type: "file", content });
-				}
+				const safeName = uniqueNodeName(arr, fname);
+				arr.push({ id: uid("file"), name: safeName, type: "file", content });
 			}));
 
 			persistCurrent();
@@ -2545,7 +2576,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			tab.onauxclick = (e) => {
 				if (e.button === 1) { // Middle click to close tab
 					e.preventDefault();
-					closeTab(id);
+					closeTab(id, e);
 				}
 			};
 

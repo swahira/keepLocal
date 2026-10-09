@@ -185,6 +185,15 @@
         assert(typeof estimate.quota === "number", "Storage quota is a number");
         logPass(`Storage estimation API works (usage: ${Math.round(estimate.usage / 1024)}KB, quota: ${Math.round(estimate.quota / (1024*1024))}MB)`);
 
+        // -------------------------------------------------------------
+        // TEST 9: ZIP Path Traversal & Sanitization (Zip Slip Prevention)
+        // -------------------------------------------------------------
+        const traversal = KeepLocalMarkdown.resolveSafeZipPath("../../etc/passwd");
+        assert(traversal.length === 2 && traversal[0] === "etc" && traversal[1] === "passwd", "Root escape traversal neutralized");
+        const special = KeepLocalMarkdown.resolveSafeZipPath("dir:one/bad*file?.md");
+        assert(special[0] === "dir_one" && special[1] === "bad_file_.md", "Special characters sanitized");
+        logPass("KeepLocalMarkdown resolveSafeZipPath Zip Slip & OS sanitization passed in browser");
+
         statusEl.textContent = "ALL TESTS PASSED";
         statusEl.className = "test-pass";
       } catch (err) {

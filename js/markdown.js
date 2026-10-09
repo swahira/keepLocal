@@ -570,6 +570,30 @@
 		return lines.join("\n");
 	}
 
+	function resolveSafeZipPath(rawPath) {
+		if (!rawPath || typeof rawPath !== "string") return [];
+		const normalized = rawPath.replace(/\\/g, "/");
+		const rawSegments = normalized.split("/");
+		const stack = [];
+
+		for (let seg of rawSegments) {
+			seg = seg.trim();
+			if (!seg || seg === ".") continue;
+			if (seg === "..") {
+				if (stack.length > 0) {
+					stack.pop();
+				}
+				continue;
+			}
+			seg = seg.replace(/[/\\:*?"<>|]/g, "_").trim();
+			if (seg && seg !== "." && seg !== "..") {
+				stack.push(seg);
+			}
+		}
+
+		return stack;
+	}
+
 	const KeepLocalMarkdown = {
 		isMarkdownFile,
 		escHtml,
@@ -581,7 +605,8 @@
 		md2h,
 		h2md,
 		textToBlocks,
-		blocksToText
+		blocksToText,
+		resolveSafeZipPath
 	};
 
 	global.KeepLocalMarkdown = KeepLocalMarkdown;

@@ -17,8 +17,8 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 | **Styling, Dead Code & CSS Defects** | 5 | 0 | 1 | 2 | 2 |
 | **Accessibility, Responsiveness & Shortcuts** | 5 | 0 | 1 | 2 | 2 |
 | **Architecture, Offline & Security** | 4 | 1 | 1 | 1 | 1 |
-| **Post-IndexedDB Migration Engine Audit** | 11 | 2 | 5 | 4 | 0 |
-| **Total** | **59** | **9** | **24** | **21** | **5** |
+| **Post-IndexedDB Migration Engine Audit** | 14 | 2 | 7 | 5 | 0 |
+| **Total** | **62** | **9** | **26** | **22** | **5** |
 
 ---
 
@@ -618,3 +618,23 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Silent write failures and unhandled transaction errors on commit quota aborts.
   - **How to Fix:** Resolve readwrite transactions on `tx.oncomplete` and always attach error/abort handlers.
 
+- [x] **AUDIT-12: ZIP Import Path Traversal (Zip Slip) & OS-Illegal Filenames** (FIXED)
+  - **Severity:** High (Security & Disk Sync Crash)
+  - **Location:** [`js/script.js#L786-L822`](file:///home/raja/Workspace/keepLocal/js/script.js#L786-L822) (`handleWelcomeImport`), [`js/script.js#L2290-L2330`](file:///home/raja/Workspace/keepLocal/js/script.js#L2290-L2330) (`handleImport`), and [`js/markdown.js#L573-L596`](file:///home/raja/Workspace/keepLocal/js/markdown.js#L573-L596) (`resolveSafeZipPath`)
+  - **Problem Description:** When importing ZIP archives, `path.split("/")` was used without path segment sanitization. Archives containing directory traversal (`..`, `.`) escaped the tree structure or created folders named `..`, and entries with OS-illegal characters (`\ / : * ? " < > |`) were pushed directly into the node tree. When synced to disk with the File System Access API, Chrome throws `TypeError: Failed to execute 'getFileHandle'/'getDirectoryHandle': The name contains invalid characters`, permanently breaking disk sync for the workspace. Duplicate filenames within the same folder were also silently dropped without warning.
+  - **Impact:** Path traversal vulnerability, fatal crashes on local disk sync, and silent data loss of duplicate-named imported files.
+  - **How to Fix:** Implement `resolveSafeZipPath(rawPath)`: normalize slashes, split segments, guard against `..` root escape using stack resolution, ignore `.` / empty segments, sanitize illegal characters with `_`, and preserve duplicate filenames using `uniqueNodeName(arr, fname)`.
+
+- [x] **AUDIT-13: Workspace Name Trimming & Live Header/Title Synchronization** (FIXED)
+  - **Severity:** Medium (UX Consistency & State Desynchronization)
+  - **Location:** [`js/script.js#L621-L640`](file:///home/raja/Workspace/keepLocal/js/script.js#L621-L640) (`createNewWorkspace`) & [`js/script.js#L847-L865`](file:///home/raja/Workspace/keepLocal/js/script.js#L847-L865) (`renameWorkspace`)
+  - **Problem Description:** `createNewWorkspace` and `renameWorkspace` did not sanitize input with `.trim()`, allowing whitespace-only names (`"   "`). When renaming the currently active workspace from the dropdown or cards, `sidebarWsName` and `document.title` were not updated to reflect the new workspace name until a complete page reload.
+  - **Impact:** Empty/blank workspace titles and stale UI labels after renaming the active workspace.
+  - **How to Fix:** Trim names in `createNewWorkspace` and `renameWorkspace`, disallow empty strings, and synchronously update `sidebarWsName.textContent` and `document.title` if `wsId === activeWsId`.
+
+- [x] **AUDIT-14: Dangling Zombie State on Active Workspace Deletion** (FIXED)
+  - **Severity:** High (State Inconsistency & Storage Leak)
+  - **Location:** [`js/script.js#L867-L895`](file:///home/raja/Workspace/keepLocal/js/script.js#L867-L895) (`deleteWorkspace`)
+  - **Problem Description:** When deleting a workspace via `deleteWorkspace(wsId)`, if that workspace was currently active (`wsId === activeWsId`), `localStorage.getItem("keeplocal_active_ws_id")` was left pointing to the deleted ID, and `activeWsId`, `workspaceHandle`, `files`, `openTabs`, and `selectedId` were not reset. The editor remained open on the deleted workspace, and any further user keystrokes resurrected deleted data into IndexedDB.
+  - **Impact:** Stale editor state, zombie data resurrection in IndexedDB, and broken startup routing.
+  - **How to Fix:** In `deleteWorkspace(wsId)`, check if `localStorage.getItem("keeplocal_active_ws_id") === wsId` and remove it; if `activeWsId === wsId`, reset `activeWsId = null`, `workspaceHandle = null`, `fsPermissionGranted = false`, `files = []`, `selectedId = null`, `openTabs = []`, `editorLoadedFileId = null`, destroy `editorInstance`, and navigate to `showWelcome()`.

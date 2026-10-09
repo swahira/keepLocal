@@ -145,4 +145,31 @@ assert.ok(roundtripMd.includes("- [x] Walk dog"));
 assert.ok(roundtripMd.includes("```py\nprint('hello')\n```"));
 console.log("✓ blocksToText roundtrip tests passed");
 
+// 8. resolveSafeZipPath (Zip Slip & path sanitization)
+const safe1 = KeepLocalMarkdown.resolveSafeZipPath("docs/sub/notes.md");
+assert.deepStrictEqual(safe1, ["docs", "sub", "notes.md"]);
+
+// Zip Slip root escape attempt
+const safe2 = KeepLocalMarkdown.resolveSafeZipPath("../../etc/passwd");
+assert.deepStrictEqual(safe2, ["etc", "passwd"]);
+
+// Relative resolution with backtracks
+const safe3 = KeepLocalMarkdown.resolveSafeZipPath("project/temp/../final/report.txt");
+assert.deepStrictEqual(safe3, ["project", "final", "report.txt"]);
+
+// OS-illegal characters replacement
+const safe4 = KeepLocalMarkdown.resolveSafeZipPath("bad:folder*/file?name<test>|pipe.md");
+assert.deepStrictEqual(safe4, ["bad_folder_", "file_name_test__pipe.md"]);
+
+// Windows-style backslashes
+const safe5 = KeepLocalMarkdown.resolveSafeZipPath("windows\\sub\\file.txt");
+assert.deepStrictEqual(safe5, ["windows", "sub", "file.txt"]);
+
+// Empty, dot, and pure traversal
+assert.deepStrictEqual(KeepLocalMarkdown.resolveSafeZipPath(""), []);
+assert.deepStrictEqual(KeepLocalMarkdown.resolveSafeZipPath(null), []);
+assert.deepStrictEqual(KeepLocalMarkdown.resolveSafeZipPath("../../../"), []);
+assert.deepStrictEqual(KeepLocalMarkdown.resolveSafeZipPath("././."), []);
+console.log("✓ resolveSafeZipPath tests passed");
+
 console.log("All KeepLocalMarkdown unit tests passed successfully!");
