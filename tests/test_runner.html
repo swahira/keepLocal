@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>KeepLocal Test Runner</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 20px; background: #18181b; color: #f4f4f5; }
+    h1 { color: #a855f7; }
+    .test-pass { color: #22c55e; }
+    .test-fail { color: #ef4444; }
+    pre { background: #27272a; padding: 12px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>KeepLocal Test Runner</h1>
+  <div id="status">Running tests...</div>
+  <div id="results"></div>
+
+  <!-- Load Modules -->
+  <script src="../js/db.js"></script>
+  <script src="../js/markdown.js"></script>
+
+  <script>
+    (async function runTests() {
+      const resultsEl = document.getElementById("results");
+      const statusEl = document.getElementById("status");
+      const logs = [];
+
+      function assert(condition, message) {
+        if (!condition) {
+          throw new Error("Assertion failed: " + message);
+        }
+      }
+
+      function logPass(title) {
+        logs.push(`<div class="test-pass">✓ ${title}</div>`);
+      }
+
+      function logFail(title, err) {
+        logs.push(`<div class="test-fail">✗ ${title}: ${err.message}</div>`);
+      }
+
+      try {
+        // Clear test database first
+        await new Promise((resolve) => {
+          const req = indexedDB.deleteDatabase("keeplocal_db");
+          req.onsuccess = () => resolve();
+          req.onerror = () => resolve();
+        });
+
+        // -------------------------------------------------------------
+        // TEST 1: KeepLocalDB Initialization & Store creation
+        // -------------------------------------------------------------
+        const db = await KeepLocalDB.openDB();
+        assert(db !== null, "Database instance should not be null");
+        assert(db.name === "keeplocal_db", "Database name must be keeplocal_db");
+        assert(db.version >= 2, "Database version should be >= 2");
+        assert(db.objectStoreNames.contains("handles"), "handles store must exist");
+        assert(db.objectStoreNames.contains("workspaces"), "workspaces store must exist");
+        assert(db.objectStoreNames.contains("files"), "files store must exist");
+        assert(db.objectStoreNames.contains("config"), "config store must exist");
+        assert(db.objectStoreNames.contains("deletions"), "deletions store must exist");
+        logPass("KeepLocalDB initialized with all 5 object stores in v2");
+
+        // -------------------------------------------------------------
+        // TEST 2: Workspaces CRUD
+        // -------------------------------------------------------------
+        const testWorkspaces = [
+          { id: "ws_test_1", name: "Test Workspace 1", createdAt: 1000, fileCount: 2 },
+          { id: "ws_test_2", name: "Test Workspace 2", createdAt: 2000, fileCount: 5 }
+        ];
+        await KeepLocalDB.saveWorkspaces(testWorkspaces);
+        const loadedWorkspaces = await KeepLocalDB.getWorkspaces();
+        assert(Array.isArray(loadedWorkspaces), "Workspaces must be an array");
+        assert(loadedWorkspaces.length === 2, "Workspaces count must be 2");
+        assert(loadedWorkspaces[0].name === "Test Workspace 1", "Workspace 1 name matches");
+        assert(loadedWorkspaces[1].name === "Test Workspace 2", "Workspace 2 name matches");
+        logPass("KeepLocalDB workspaces save & load");
+
+        // -------------------------------------------------------------
+        // TEST 3: Files CRUD (File tree persistence)
+        // -------------------------------------------------------------
+        const testFiles = [
+          { id: "f_1", name: "welcome.md", type: "file", content: "# Hello KeepLocal" },
+          {
+            id: "d_1", name: "Docs", type: "folder", isOpen: true, children: [
+              { id: "f_2", name: "subnote.md", type: "file", content: "Sub note content" }
+            ]
+          }
+        ];
+        await KeepLocalDB.saveFiles("ws_test_1", testFiles);
+        const loadedFiles = await KeepLocalDB.getFiles("ws_test_1");
+        assert(Array.isArray(loadedFiles), "Files must be an array");
+        assert(loadedFiles.length === 2, "Root files count must be 2");
+        assert(loadedFiles[0].content === "# Hello KeepLocal", "Content matches");
+        assert(loadedFiles[1].children.length === 1, "Child directory loaded");
+        assert(loadedFiles[1].children[0].content === "Sub note content", "Child content matches");
+        logPass("KeepLocalDB files tree save & load");
+
+        // -------------------------------------------------------------
+        // TEST 4: Config & Deletions CRUD
+        // -------------------------------------------------------------
+        const testConfig = { theme: "dark", fontSize: 14, openTabs: ["f_1", "f_2"] };
+        await KeepLocalDB.saveConfig("ws_test_1", testConfig);
+        const loadedConfig = await KeepLocalDB.getConfig("ws_test_1");
+        assert(loadedConfig.theme === "dark", "Config theme matches");
+        assert(loadedConfig.fontSize === 14, "Config fontSize matches");
+        assert(loadedConfig.openTabs.length === 2, "Config openTabs matches");
+
+        const testDeletions = [{ pathParts: ["Docs"], name: "old.md" }];
+        await KeepLocalDB.saveDeletions("ws_test_1", testDeletions);
+        const loadedDeletions = await KeepLocalDB.getDeletions("ws_test_1");
+        assert(loadedDeletions.length === 1, "Deletions loaded");
+        assert(loadedDeletions[0].name === "old.md", "Deletion entry matches");
+        logPass("KeepLocalDB config & deletions save & load");
+
+        // -------------------------------------------------------------
+        // TEST 5: Large Payload & Multiple Images (10 x 1MB images in IndexedDB)
+        // -------------------------------------------------------------
+        // Generate a ~1MB image payload
+        const dummy1MB = "data:image/png;base64," + "A".repeat(1024 * 1024);
+        let multiImageNote = "# Multi Image Note\n";
+        for (let i = 0; i < 10; i++) {
+          multiImageNote += `\n![Image ${i + 1}](${dummy1MB})\n`;
+        }
+
+        const largeFiles = [
+          { id: "f_large", name: "large_note.md", type: "file", content: multiImageNote }
+        ];
+
+        const saveStart = performance.now();
+        await KeepLocalDB.saveFiles("ws_large", largeFiles);
+        const saveTime = performance.now() - saveStart;
+
+        const loadStart = performance.now();
+        const reloadedLargeFiles = await KeepLocalDB.getFiles("ws_large");
+        const loadTime = performance.now() - loadStart;
+
+        assert(reloadedLargeFiles.length === 1, "Large note loaded");
+        assert(reloadedLargeFiles[0].content.length === multiImageNote.length, "Large note content length matches ~10MB payload");
+        logPass(`KeepLocalDB 10x 1MB image payload test passed (Saved in ${Math.round(saveTime)}ms, Loaded in ${Math.round(loadTime)}ms)`);
+
+        // -------------------------------------------------------------
+        // TEST 6: Delete Workspace Data
+        // -------------------------------------------------------------
+        await KeepLocalDB.deleteWorkspaceData("ws_large");
+        const afterDeleteFiles = await KeepLocalDB.getFiles("ws_large");
+        assert(afterDeleteFiles.length === 0, "Files should be empty after deletion");
+        logPass("KeepLocalDB deleteWorkspaceData removes all stores for workspace");
+
+        // -------------------------------------------------------------
+        // TEST 7: Transparent Migration from LocalStorage
+        // -------------------------------------------------------------
+        // Setup mock legacy localStorage items
+        localStorage.removeItem("keeplocal_migrated_to_idb_v2");
+        localStorage.setItem("keeplocal_workspaces", JSON.stringify([
+          { id: "ws_legacy", name: "Legacy Notes", createdAt: 500, fileCount: 1 }
+        ]));
+        localStorage.setItem("keeplocal_files_ws_legacy", JSON.stringify([
+          { id: "f_leg", name: "legacy.md", type: "file", content: "Legacy content" }
+        ]));
+        localStorage.setItem("keeplocal_cfg_ws_legacy", JSON.stringify({ theme: "light" }));
+
+        const migResult = await KeepLocalDB.migrateFromLocalStorage();
+        assert(migResult.migrated === true, "Migration should report migrated: true");
+        assert(localStorage.getItem("keeplocal_migrated_to_idb_v2") === "true", "Migration flag must be set");
+
+        const migratedFiles = await KeepLocalDB.getFiles("ws_legacy");
+        assert(migratedFiles.length === 1, "Migrated files count matches");
+        assert(migratedFiles[0].content === "Legacy content", "Migrated content matches");
+
+        const migratedCfg = await KeepLocalDB.getConfig("ws_legacy");
+        assert(migratedCfg.theme === "light", "Migrated config matches");
+
+        // Assert large payload was cleared from localStorage to reclaim space
+        assert(localStorage.getItem("keeplocal_files_ws_legacy") === null, "Legacy files payload removed from localStorage");
+        logPass("KeepLocalDB transparent migration from localStorage to IndexedDB passed");
+
+        // -------------------------------------------------------------
+        // TEST 8: Storage Estimate API
+        // -------------------------------------------------------------
+        const estimate = await KeepLocalDB.getStorageEstimate();
+        assert(typeof estimate.percentage === "number", "Storage percentage is a number");
+        assert(typeof estimate.usage === "number", "Storage usage is a number");
+        assert(typeof estimate.quota === "number", "Storage quota is a number");
+        logPass(`Storage estimation API works (usage: ${Math.round(estimate.usage / 1024)}KB, quota: ${Math.round(estimate.quota / (1024*1024))}MB)`);
+
+        statusEl.textContent = "ALL TESTS PASSED";
+        statusEl.className = "test-pass";
+      } catch (err) {
+        logFail("Test Suite Error", err);
+        statusEl.textContent = "TESTS FAILED: " + err.message;
+        statusEl.className = "test-fail";
+      }
+
+      resultsEl.innerHTML = logs.join("");
+      window.__TEST_RESULTS__ = {
+        passed: statusEl.textContent === "ALL TESTS PASSED",
+        logs: logs
+      };
+    })();
+  </script>
+</body>
+</html>

@@ -687,6 +687,9 @@ button {
 	flex-direction: column;
 	background: var(--bg-primary);
 	min-width: 0;
+	min-height: 0;
+	height: 100%;
+	overflow: hidden;
 }
 
 /* ── Editor Tabs Bar (VS Code Style) ── */
@@ -910,6 +913,44 @@ button {
 	display: flex;
 	overflow: hidden;
 	position: relative;
+	min-height: 0;
+	min-width: 0;
+	height: 100%;
+}
+
+/* Editor Loading Overlay */
+.editor-loading-overlay {
+	position: absolute;
+	inset: 0;
+	background: var(--bg-primary);
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 14px;
+	z-index: 25;
+	transition: opacity 0.15s ease, visibility 0.15s ease;
+	user-select: none;
+}
+
+.editor-loading-spinner {
+	width: 26px;
+	height: 26px;
+	border: 2.5px solid var(--border-color);
+	border-top-color: var(--accent-color);
+	border-radius: 50%;
+	animation: editorSpin 0.7s linear infinite;
+}
+
+.editor-loading-text {
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text-secondary);
+	letter-spacing: 0.2px;
+}
+
+@keyframes editorSpin {
+	to { transform: rotate(360deg); }
 }
 
 /* Editor Empty State */
@@ -1113,8 +1154,12 @@ button {
 .editorjs-wrapper {
 	flex: 1;
 	height: 100%;
+	min-height: 0;
 	overflow-y: auto;
+	overflow-x: hidden;
 	padding: 32px 0;
+	scrollbar-width: thin;
+	scrollbar-color: rgba(160, 160, 160, 0.3) transparent;
 }
 
 .editorjs-wrapper ::selection {
@@ -1123,12 +1168,20 @@ button {
 }
 
 .editorjs-wrapper::-webkit-scrollbar {
-	width: 5px;
+	width: 8px;
+}
+
+.editorjs-wrapper::-webkit-scrollbar-track {
+	background: transparent;
 }
 
 .editorjs-wrapper::-webkit-scrollbar-thumb {
-	background: var(--border-color);
-	border-radius: 3px;
+	background: rgba(160, 160, 160, 0.28);
+	border-radius: 4px;
+}
+
+.editorjs-wrapper::-webkit-scrollbar-thumb:hover {
+	background: rgba(160, 160, 160, 0.48);
 }
 
 #editorjs-holder {

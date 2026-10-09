@@ -56,6 +56,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const modeSwitchGroup = document.getElementById("modeSwitchGroup");
 	const modeBlockBtn = document.getElementById("modeBlockBtn");
 	const modePlainBtn = document.getElementById("modePlainBtn");
+	const editorLoadingOverlay = document.getElementById("editorLoadingOverlay");
+	const editorLoadingText = document.getElementById("editorLoadingText");
+
+	function showEditorLoading(message = "Loading note…") {
+		if (!editorLoadingOverlay) return;
+		if (editorLoadingText) editorLoadingText.textContent = message;
+		editorLoadingOverlay.classList.remove("hidden");
+	}
+
+	function hideEditorLoading() {
+		if (!editorLoadingOverlay) return;
+		editorLoadingOverlay.classList.add("hidden");
+	}
 
 	function isMarkdownFile(filename) {
 		if (!filename) return false;
@@ -75,45 +88,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const supportsFS = "showDirectoryPicker" in window;
 
 	// ============================================================
-	// INDEXEDDB — persist folder handles
+	// INDEXEDDB DELEGATION (KeepLocalDB)
 	// ============================================================
-	const IDB_NAME = "keeplocal_db";
-	const IDB_STORE = "handles";
-
-	function idbOpen() {
-		return new Promise((res, rej) => {
-			const r = indexedDB.open(IDB_NAME, 1);
-			r.onupgradeneeded = e => e.target.result.createObjectStore(IDB_STORE);
-			r.onsuccess = e => res(e.target.result);
-			r.onerror = () => rej(r.error);
-		});
-	}
-	async function idbSet(key, val) {
-		try {
-			const db = await idbOpen();
-			const tx = db.transaction(IDB_STORE, "readwrite");
-			tx.objectStore(IDB_STORE).put(val, key);
-			return new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
-		} catch (e) { console.warn("idbSet:", e); }
-	}
-	async function idbGet(key) {
-		try {
-			const db = await idbOpen();
-			return new Promise((res, rej) => {
-				const tx = db.transaction(IDB_STORE, "readonly");
-				const req = tx.objectStore(IDB_STORE).get(key);
-				req.onsuccess = () => res(req.result);
-				req.onerror = () => rej(req.error);
-			});
-		} catch { return null; }
-	}
-	async function idbDel(key) {
-		try {
-			const db = await idbOpen();
-			const tx = db.transaction(IDB_STORE, "readwrite");
-			tx.objectStore(IDB_STORE).delete(key);
-		} catch (e) { console.warn("idbDel:", e); }
-	}
+	const idbSet = (key, val) => KeepLocalDB.set(KeepLocalDB.STORES.HANDLES, key, val);
+	const idbGet = (key) => KeepLocalDB.get(KeepLocalDB.STORES.HANDLES, key);
+	const idbDel = (key) => KeepLocalDB.del(KeepLocalDB.STORES.HANDLES, key);
 
 	// ============================================================
 	// UNIQUE ID
@@ -148,33 +127,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 	}
 
-	function getLocalStorageUsageChars() {
-		let total = 0;
-		try {
-			for (let i = 0; i < localStorage.length; i++) {
-				const key = localStorage.key(i);
-				if (key) {
-					const val = localStorage.getItem(key);
-					total += key.length + (val ? val.length : 0);
-				}
-			}
-		} catch (_) { }
-		return total;
-	}
-
-	function checkStorageQuota() {
-		if (workspaceHandle) {
+	async function checkStorageQuota() {
+		if (workspaceHandle && fsPermissionGranted) {
 			updateStorageQuotaUI(false, 0);
 			return;
 		}
-		const chars = getLocalStorageUsageChars();
-		const maxChars = 5242880; // ~5MB default browser quota limit
-		const pct = Math.min(100, Math.round((chars / maxChars) * 100));
-
-		if (pct >= 80) {
-			updateStorageQuotaUI(pct >= 98, pct);
-		} else {
-			updateStorageQuotaUI(false, pct);
+		try {
+			const est = await KeepLocalDB.getStorageEstimate();
+			if (est && est.isSupported && est.quota > 0) {
+				const pct = est.percentage;
+				if (pct >= 80) {
+					updateStorageQuotaUI(pct >= 95, pct);
+				} else {
+					updateStorageQuotaUI(false, pct);
+				}
+			} else {
+				updateStorageQuotaUI(false, 0);
+			}
+		} catch (_) {
+			updateStorageQuotaUI(false, 0);
 		}
 	}
 
@@ -183,41 +154,63 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const text = document.getElementById("storageQuotaText");
 		if (!banner) return;
 
-		if (workspaceHandle) {
+		if (workspaceHandle && fsPermissionGranted) {
 			banner.classList.add("hidden");
 			return;
 		}
 
+		const quotaBtn = banner.querySelector(".storage-quota-btn");
+		const isUnauthorizedFolder = workspaceHandle && !fsPermissionGranted;
+
+		if (quotaBtn) {
+			if (isUnauthorizedFolder) {
+				quotaBtn.textContent = "Authorize";
+				quotaBtn.onclick = () => requestReauthorization();
+			} else {
+				quotaBtn.textContent = "Connect";
+				quotaBtn.onclick = () => saveWorkspace();
+			}
+		}
+
 		if (isFull) {
 			banner.className = "storage-quota-banner danger";
-			if (text) text.textContent = "Storage full! Connect folder";
+			if (text) {
+				text.textContent = isUnauthorizedFolder
+					? "Storage full! Re-authorize folder"
+					: "Storage full! Connect folder";
+			}
 			banner.classList.remove("hidden");
-			if (window.lucide) lucide.createIcons();
+			if (window.lucide) window.lucide.createIcons();
 		} else if (pct >= 80) {
 			banner.className = "storage-quota-banner warning";
 			if (text) text.textContent = `Storage ~${pct}% full`;
 			banner.classList.remove("hidden");
-			if (window.lucide) lucide.createIcons();
+			if (window.lucide) window.lucide.createIcons();
 		} else {
 			banner.classList.add("hidden");
 		}
 	}
 
 	function notifyStorageQuotaExceeded() {
-		if (workspaceHandle) return; // files are safely on physical disk
+		if (workspaceHandle && fsPermissionGranted) return; // files are safely on physical disk
 		const now = Date.now();
 		if (now - lastQuotaWarningTime < QUOTA_WARNING_COOLDOWN_MS) return;
 		lastQuotaWarningTime = now;
 
 		if (supportsFS) {
+			const isUnauthorizedFolder = workspaceHandle && !fsPermissionGranted;
 			showChoiceModal({
-				title: "Browser Storage Limit Reached (~5MB)",
-				message: "Your browser's local storage quota has been reached. New changes cannot be saved locally. Connect a computer folder to save unlimited notes directly to your hard drive, or export your notes.",
+				title: "Browser Storage Limit Reached",
+				message: isUnauthorizedFolder
+					? `Your browser's storage limit has been reached, and folder "${workspaceHandle.name}" is not authorized. Grant folder access to save unlimited notes directly to your hard drive.`
+					: "Your browser's storage quota has been reached. New changes cannot be saved locally. Connect a computer folder to save unlimited notes directly to your hard drive, or export your notes.",
 				choices: [
 					{
-						label: "Connect Folder (Recommended)",
-						description: "Save unlimited files directly to your computer's hard drive.",
-						action: "connect",
+						label: isUnauthorizedFolder ? "Re-authorize Folder (Recommended)" : "Connect Folder (Recommended)",
+						description: isUnauthorizedFolder
+							? `Grant disk write permission to "${workspaceHandle.name}".`
+							: "Save unlimited files directly to your computer's hard drive.",
+						action: isUnauthorizedFolder ? "reauth" : "connect",
 						primary: true
 					},
 					{
@@ -232,7 +225,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 					}
 				],
 				onSelect: (action) => {
-					if (action === "connect") {
+					if (action === "reauth") {
+						requestReauthorization();
+					} else if (action === "connect") {
 						saveWorkspace();
 					} else if (action === "export") {
 						exportAll();
@@ -242,40 +237,87 @@ document.addEventListener("DOMContentLoaded", async () => {
 		} else {
 			showAlertModal(
 				"Browser Storage Full",
-				"Your browser's local storage limit (~5MB) has been reached. Please export your notes or delete unneeded files to free up space."
+				"Your browser's storage limit has been reached. Please export your notes or delete unneeded files to free up space."
 			);
 		}
 	}
 
 	function saveWorkspaceMeta() {
 		try {
-			localStorage.setItem("keeplocal_workspaces", JSON.stringify(workspaces));
+			KeepLocalDB.saveWorkspaces(workspaces).catch(e => handleStorageError(e, "saveWorkspaceMeta"));
 		} catch (e) {
 			handleStorageError(e, "saveWorkspaceMeta");
 		}
 	}
-	function loadWorkspaceMeta() {
+	async function loadWorkspaceMeta() {
 		try {
-			const raw = localStorage.getItem("keeplocal_workspaces");
-			workspaces = raw ? JSON.parse(raw) : [];
+			workspaces = await KeepLocalDB.getWorkspaces();
 		} catch (e) {
 			console.warn("loadWorkspaceMeta:", e);
 			workspaces = [];
 		}
 	}
 
-	function saveWsFiles(wsId) {
+	let isOptimizingWsFiles = false;
+	async function optimizeOversizedFiles(wsId) {
+		if (isOptimizingWsFiles) return;
+		isOptimizingWsFiles = true;
 		try {
-			localStorage.setItem(`keeplocal_files_${wsId}`, JSON.stringify(files));
-			checkStorageQuota();
-		} catch (e) {
-			handleStorageError(e, "saveWsFiles");
+			let modified = false;
+			const processNode = async (node) => {
+				if (node.type === "file" && typeof node.content === "string") {
+					if (node.content.includes("data:image/") && node.content.length > 150 * 1024) {
+						const regex = /data:image\/(?:png|jpeg|jpg);base64,[A-Za-z0-9+/=]{1000,}/g;
+						const matches = node.content.match(regex);
+						if (matches && matches.length > 0) {
+							let newContent = node.content;
+							for (const match of matches) {
+								if (match.length > 80 * 1024) {
+									const comp = await compressDataUrl(match);
+									if (comp && comp.length < match.length) {
+										newContent = newContent.replace(match, comp);
+										modified = true;
+									}
+								}
+							}
+							node.content = newContent;
+						}
+					}
+				}
+				if (node.children) {
+					for (const child of node.children) {
+						await processNode(child);
+					}
+				}
+			};
+			for (const f of files) {
+				await processNode(f);
+			}
+			if (modified && wsId) {
+				await KeepLocalDB.saveFiles(wsId, files);
+				checkStorageQuota();
+			}
+		} catch (_) { }
+		finally {
+			isOptimizingWsFiles = false;
 		}
 	}
-	function loadWsFiles(wsId) {
+
+	function saveWsFiles(wsId) {
+		if (!wsId) return Promise.resolve();
+		return KeepLocalDB.saveFiles(wsId, files).then(() => {
+			checkStorageQuota();
+		}).catch(e => {
+			handleStorageError(e, "saveWsFiles");
+			if (isQuotaExceededError(e)) {
+				optimizeOversizedFiles(wsId);
+			}
+		});
+	}
+	async function loadWsFiles(wsId) {
 		try {
-			const raw = localStorage.getItem(`keeplocal_files_${wsId}`);
-			files = raw ? JSON.parse(raw) : [];
+			files = await KeepLocalDB.getFiles(wsId);
+			checkStorageQuota();
 		} catch (e) {
 			console.warn("loadWsFiles:", e);
 			files = [];
@@ -283,21 +325,20 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function saveWsConfig(wsId) {
+		if (!wsId) return Promise.resolve();
 		const sidebar = document.querySelector(".sidebar");
-		try {
-			localStorage.setItem(`keeplocal_cfg_${wsId}`, JSON.stringify({
-				theme, fontSize, selectedId, editorMode, openTabs, isWordWrap,
-				sidebarWidth: sidebar ? sidebar.offsetWidth : undefined
-			}));
-		} catch (e) {
+		return KeepLocalDB.saveConfig(wsId, {
+			theme, fontSize, selectedId, editorMode, openTabs, isWordWrap,
+			sidebarWidth: sidebar ? sidebar.offsetWidth : undefined
+		}).catch(e => {
 			handleStorageError(e, "saveWsConfig");
-		}
+		});
 	}
-	function loadWsConfig(wsId) {
+	async function loadWsConfig(wsId) {
 		try {
-			const raw = localStorage.getItem(`keeplocal_cfg_${wsId}`);
-			if (raw) {
-				const c = JSON.parse(raw);
+			const c = await KeepLocalDB.getConfig(wsId);
+			const sidebar = document.querySelector(".sidebar");
+			if (c) {
 				theme = c.theme || "dark";
 				fontSize = Number.isFinite(Number(c.fontSize))
 					? Number(c.fontSize)
@@ -323,17 +364,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 			openTabs = [];
 			isWordWrap = false;
 			document.documentElement.style.removeProperty("--sidebar-width");
+			const sidebar = document.querySelector(".sidebar");
 			if (sidebar) sidebar.style.width = "";
 		}
 	}
 
-	function deleteWsData(wsId) {
+	async function deleteWsData(wsId) {
+		if (!wsId) return;
 		try {
-			localStorage.removeItem(`keeplocal_files_${wsId}`);
-			localStorage.removeItem(`keeplocal_cfg_${wsId}`);
-			localStorage.removeItem(`keeplocal_deletions_${wsId}`);
+			await KeepLocalDB.deleteWorkspaceData(wsId);
 		} catch (_) { }
-		idbDel(`handle_${wsId}`);
 		checkStorageQuota();
 	}
 
@@ -344,17 +384,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	function saveWsDeletions(wsId) {
-		try {
-			localStorage.setItem(`keeplocal_deletions_${wsId}`, JSON.stringify(pendingDeletions));
-		} catch (e) {
+		if (!wsId) return Promise.resolve();
+		return KeepLocalDB.saveDeletions(wsId, pendingDeletions).catch(e => {
 			handleStorageError(e, "saveWsDeletions");
-		}
+		});
 	}
 
-	function loadWsDeletions(wsId) {
+	async function loadWsDeletions(wsId) {
 		try {
-			const raw = localStorage.getItem(`keeplocal_deletions_${wsId}`);
-			pendingDeletions = raw ? JSON.parse(raw) : [];
+			pendingDeletions = await KeepLocalDB.getDeletions(wsId);
 		} catch {
 			pendingDeletions = [];
 		}
@@ -375,6 +413,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		welcomeScreen.classList.remove("hidden");
 		appShell.classList.add("hidden");
 		document.title = "KeepLocal – Workspaces";
+		if (window.location.hash !== "#/workspaces" && !window.location.search.includes("view=workspaces")) {
+			try { history.replaceState(null, "", "#/workspaces"); } catch (_) { }
+		}
 		renderWorkspaceCards();
 		// FS banner
 		if (!supportsFS) {
@@ -382,8 +423,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (fsBanner) {
 				fsBanner.classList.remove("hidden");
 				if (!isSecure) {
-					fsBanner.innerHTML = `<i data-lucide="alert-triangle" size="14"></i> Folder sync requires a Secure Context. Access via <a href="http://localhost:${location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
-					if (window.lucide) lucide.createIcons();
+					fsBanner.innerHTML = `<i data-lucide="alert-triangle" size="14"></i> Folder sync requires a Secure Context. Access via <a href="http://localhost:${window.location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
+					if (window.lucide) window.lucide.createIcons();
 				}
 			}
 			const openFolderBtn = document.getElementById("openFolderBtn");
@@ -399,9 +440,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 		wsCountBadge.textContent = workspaces.length;
 
 		if (workspaces.length === 0) {
-			workspacesEmpty.querySelector("p").textContent = "No workspaces yet";
-			workspacesEmpty.querySelector("small").textContent = 'Click "New Workspace" to get started';
-			workspacesEmpty.classList.remove("hidden");
+			const p = workspacesEmpty?.querySelector("p");
+			if (p) p.textContent = "No workspaces yet";
+			const small = workspacesEmpty?.querySelector("small");
+			if (small) small.textContent = 'Click "New Workspace" to get started';
+			workspacesEmpty?.classList.remove("hidden");
 			return;
 		}
 
@@ -412,12 +455,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 			: sorted;
 
 		if (filtered.length === 0) {
-			workspacesEmpty.querySelector("p").textContent = "No matching workspaces";
-			workspacesEmpty.querySelector("small").textContent = "Try a different search term";
-			workspacesEmpty.classList.remove("hidden");
+			const p = workspacesEmpty?.querySelector("p");
+			if (p) p.textContent = "No matching workspaces";
+			const small = workspacesEmpty?.querySelector("small");
+			if (small) small.textContent = "Try a different search term";
+			workspacesEmpty?.classList.remove("hidden");
 			return;
 		}
-		workspacesEmpty.classList.add("hidden");
+		workspacesEmpty?.classList.add("hidden");
 
 		for (const ws of filtered) {
 			const card = document.createElement("div");
@@ -455,7 +500,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			workspacesList.appendChild(card);
 		}
 
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	function escHtml(str) {
@@ -560,7 +605,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			wsDropdownList.appendChild(item);
 		});
 
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	window.addEventListener("click", (e) => {
@@ -642,7 +687,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	window.openFolderWorkspace = async function () {
 		if (!supportsFS) {
 			if (!isSecure) {
-				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${location.port || 8000}.`);
+				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${window.location.port || 8000}.`);
 			} else {
 				showAlertModal("Not supported", "Folder sync requires Chrome, Edge, or Brave.");
 			}
@@ -830,78 +875,99 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// Open a workspace → switch to editor view
 	async function openWorkspace(wsId, skipFileLoad = false) {
 		const ws = workspaces.find(w => w.id === wsId);
-		if (!ws) return;
-
-		// Save current active workspace before opening the new one
-		if (activeWsId && activeWsId !== wsId) {
-			await autoSaveCurrentFile();
-			saveWsFiles(activeWsId);
-			saveWsConfig(activeWsId);
-			updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
+		if (!ws) {
+			showWelcome();
+			return;
 		}
 
-		activeWsId = wsId;
-		ws.lastOpenedAt = Date.now();
-		saveWorkspaceMeta();
-
-		// Load config for this workspace
-		loadWsConfig(wsId);
-		loadWsDeletions(wsId);
-
-		// Load files (unless already in memory from folder read)
-		if (!skipFileLoad) {
-			loadWsFiles(wsId);
-		}
-
-		// Try to restore folder handle from IDB
-		workspaceHandle = null;
-		fsPermissionGranted = false;
-		if (supportsFS && ws.folderName) {
-			try {
-				const h = await idbGet(`handle_${wsId}`);
-				if (h) {
-					workspaceHandle = h;
-					const perm = await h.queryPermission({ mode: "readwrite" });
-					fsPermissionGranted = (perm === "granted");
-				}
-			} catch (e) { console.warn("Could not restore handle:", e); }
-		}
-
-		// Validate selectedId
-		if (selectedId && !findNode(files, selectedId)) selectedId = null;
-
-		// If no selectedId, but openTabs has valid files, select the first valid tab
-		if (!selectedId && openTabs.length > 0) {
-			const validTab = openTabs.find(tid => {
-				const n = findNode(files, tid);
-				return n && n.type === "file";
-			});
-			if (validTab) selectedId = validTab;
-		}
-
-		// Save active workspace ID so page reload returns here directly
 		try {
-			localStorage.setItem("keeplocal_active_ws_id", wsId);
-		} catch (e) {
-			handleStorageError(e, "openWorkspace");
+			// Save current active workspace before opening the new one
+			if (activeWsId && activeWsId !== wsId) {
+				await autoSaveCurrentFile();
+				saveWsFiles(activeWsId);
+				saveWsConfig(activeWsId);
+				updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
+			}
+
+			activeWsId = wsId;
+			ws.lastOpenedAt = Date.now();
+			saveWorkspaceMeta();
+
+			// Load config for this workspace
+			await loadWsConfig(wsId);
+			await loadWsDeletions(wsId);
+
+			// Load files (unless already in memory from folder read)
+			if (!skipFileLoad) {
+				await loadWsFiles(wsId);
+			}
+
+			// Try to restore folder handle from IDB
+			workspaceHandle = null;
+			fsPermissionGranted = false;
+			if (supportsFS && ws.folderName) {
+				try {
+					const h = await idbGet(`handle_${wsId}`);
+					if (h) {
+						workspaceHandle = h;
+						const perm = await h.queryPermission({ mode: "readwrite" });
+						fsPermissionGranted = (perm === "granted");
+					}
+				} catch (e) { console.warn("Could not restore handle:", e); }
+			}
+
+			// Validate selectedId
+			if (selectedId && !findNode(files, selectedId)) selectedId = null;
+
+			// If no selectedId, but openTabs has valid files, select the first valid tab
+			if (!selectedId && openTabs.length > 0) {
+				const validTab = openTabs.find(tid => {
+					const n = findNode(files, tid);
+					return n && n.type === "file";
+				});
+				if (validTab) selectedId = validTab;
+			}
+
+			// Save active workspace ID so page reload returns here directly
+			try {
+				localStorage.setItem("keeplocal_active_ws_id", wsId);
+			} catch (e) {
+				handleStorageError(e, "openWorkspace");
+			}
+
+			// Switch views
+			welcomeScreen.classList.add("hidden");
+			appShell.classList.remove("hidden");
+			document.title = `${ws.name} – KeepLocal`;
+
+			// Update hash route if needed
+			if (window.location.hash !== `#/workspace/${wsId}`) {
+				try { history.replaceState(null, "", `#/workspace/${wsId}`); } catch (_) { }
+			}
+
+			// Update UI
+			sidebarWsName.textContent = ws.name;
+			applyConfig();
+			updateEditorModeUI();
+			initWorkspaceButton();
+			updateFolderUI();
+			render();
+			await loadFile();
+			checkStorageQuota();
+
+			if (window.lucide) window.lucide.createIcons();
+		} catch (err) {
+			console.error("[KeepLocal] Error opening workspace:", err);
+			try {
+				localStorage.removeItem("keeplocal_active_ws_id");
+			} catch (_) { }
+			activeWsId = null;
+			showWelcome();
+			showAlertModal(
+				"Workspace Error",
+				`There was a problem loading workspace "${ws.name}". The workspace manager has been opened so you can choose another workspace, export a backup, or manage your notes.`
+			);
 		}
-
-		// Switch views
-		welcomeScreen.classList.add("hidden");
-		appShell.classList.remove("hidden");
-		document.title = `${ws.name} – KeepLocal`;
-
-		// Update UI
-		sidebarWsName.textContent = ws.name;
-		applyConfig();
-		updateEditorModeUI();
-		initWorkspaceButton();
-		updateFolderUI();
-		render();
-		await loadFile();
-		checkStorageQuota();
-
-		if (window.lucide) lucide.createIcons();
 	}
 
 	window.goHome = async function () {
@@ -915,6 +981,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 		try {
 			localStorage.removeItem("keeplocal_active_ws_id");
+			if (window.location.hash !== "#/workspaces") {
+				history.pushState(null, "", "#/workspaces");
+			}
 		} catch (_) { }
 		activeWsId = null;
 		workspaceHandle = null;
@@ -977,7 +1046,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         `;
 
 			if (window.lucide) {
-				lucide.createIcons();
+				window.lucide.createIcons();
 			}
 		}
 
@@ -1113,7 +1182,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				wsStatusBadge.textContent = "No folder";
 				wsStatusBadge.classList.remove("connected");
 			}
-			if (window.lucide) lucide.createIcons();
+			if (window.lucide) window.lucide.createIcons();
 			return;
 		}
 
@@ -1163,7 +1232,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		}
 		checkStorageQuota();
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	window.requestReauthorization = async function () {
@@ -1193,7 +1262,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (browserSupportMsg) {
 				browserSupportMsg.classList.remove("hidden");
 				if (!isSecure) {
-					browserSupportMsg.innerHTML = `⚠ Folder sync requires a Secure Context. Access via <a href="http://localhost:${location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
+					browserSupportMsg.innerHTML = `⚠ Folder sync requires a Secure Context. Access via <a href="http://localhost:${window.location.port || 8000}" style="color:var(--accent-color);text-decoration:underline;">localhost</a>.`;
 				}
 			}
 		}
@@ -1461,7 +1530,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function openHelpModal() {
 		if (!helpModalOverlay) return;
 		helpModalOverlay.classList.add("active");
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 		const focusBtn = helpModalOverlay.querySelector(".help-got-it-btn") || helpModalOverlay.querySelector(".help-close-btn");
 		setTimeout(() => { if (focusBtn) focusBtn.focus(); }, 30);
 	}
@@ -1565,7 +1634,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	window.saveWorkspace = async function () {
 		if (!supportsFS) {
 			if (!isSecure) {
-				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${location.port || 8000}.`);
+				showAlertModal("Insecure Context", `Folder sync requires a Secure Context (HTTPS or localhost). Please access via http://localhost:${window.location.port || 8000}.`);
 			} else {
 				showAlertModal("Not supported", "Requires Chrome, Edge, or Brave.");
 			}
@@ -2469,7 +2538,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			tabsListEl.appendChild(tab);
 		});
 
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	// ============================================================
@@ -2487,7 +2556,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 		renderTabs();
 		updateBreadcrumbs();
-		if (window.lucide) lucide.createIcons();
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	function renderTree(nodes, container, depth) {
@@ -2554,7 +2623,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					const iconWrap = el.querySelector(".icon");
 					if (iconWrap && window.lucide) {
 						iconWrap.innerHTML = `<i data-lucide="${node.isOpen ? 'folder-open' : 'folder'}" size="15"></i>`;
-						lucide.createIcons();
+						window.lucide.createIcons();
 					}
 					const childSubTree = el.nextElementSibling;
 					if (childSubTree && childSubTree.classList.contains("folder-children")) {
@@ -2639,308 +2708,46 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	// ============================================================
-	// EDITOR.JS MARKDOWN BRIDGE
-	// ============================================================
-	// EDITOR.JS MARKDOWN BRIDGE
+	// EDITOR.JS MARKDOWN BRIDGE (Delegated to KeepLocalMarkdown)
 	// ============================================================
 	function sanitizeUrl(url) {
-		if (!url) return "#";
-		const trimmed = url.trim();
-		// Allow safe web schemes and relative anchors/paths
-		if (/^(?:(?:https?|mailto|tel):|\/|\.\/|\.\.\/|#)/i.test(trimmed)) {
-			return trimmed;
-		}
-		// Allow image data URIs
-		if (/^data:image\/(?:png|jpeg|jpg|gif|svg\+xml|webp);base64,[A-Za-z0-9+/=]+$/i.test(trimmed)) {
-			return trimmed;
-		}
-		return "#";
+		return KeepLocalMarkdown.sanitizeUrl(url);
+	}
+
+	function parseStandaloneImage(str) {
+		return KeepLocalMarkdown.parseStandaloneImage(str);
+	}
+
+	function replaceMarkdownLinksAndImages(text, sanitizeUrlFn) {
+		return KeepLocalMarkdown.replaceMarkdownLinksAndImages(text, sanitizeUrlFn);
+	}
+
+	async function compressDataUrl(dataUrl, maxWidth = 1200, maxHeight = 1200, quality = 0.78) {
+		return KeepLocalMarkdown.compressDataUrl(dataUrl, maxWidth, maxHeight, quality);
+	}
+
+	async function compressImageFile(file, maxWidth = 1200, maxHeight = 1200, quality = 0.78) {
+		return KeepLocalMarkdown.compressImageFile(file, maxWidth, maxHeight, quality);
 	}
 
 	function textToBlocks(text) {
-		if (!text?.trim()) return [{ type: "paragraph", data: { text: "" } }];
-		const lines = text.split("\n");
-		const blocks = [];
-		let inCode = false, codeBuf = [], tableBuf = [], currentCodeLang = "";
-		let listStack = [];
-
-		const flushCode = () => {
-			if (codeBuf.length || inCode) {
-				blocks.push({
-					type: "code",
-					data: {
-						code: codeBuf.join("\n"),
-						language: currentCodeLang || ""
-					}
-				});
-				codeBuf = [];
-				currentCodeLang = "";
-			}
-		};
-		const flushTable = () => {
-			if (!tableBuf.length) return;
-			// Check if table contains a markdown header separator row, e.g. | --- | --- | (MD-04)
-			const hasHeaderSep = tableBuf.length > 1 && tableBuf[1].split("|").slice(1, -1).every(c => /^:?-+:?$/.test(c.trim()));
-			const content = tableBuf
-				.map(r => r.split("|").slice(1, -1).map(c => c.trim()))
-				.filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c)));
-			if (content.length) {
-				blocks.push({ type: "table", data: { content, withHeadings: hasHeaderSep } });
-			}
-			tableBuf = [];
-		};
-
-		for (const line of lines) {
-			if (line.trim().startsWith("```")) {
-				listStack = [];
-				if (inCode) {
-					inCode = false;
-					flushCode();
-				} else {
-					flushTable();
-					inCode = true;
-					currentCodeLang = line.trim().slice(3).trim(); // MD-02
-				}
-				continue;
-			}
-			if (inCode) { codeBuf.push(line); continue; }
-			if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
-				listStack = [];
-				tableBuf.push(line.trim());
-				continue;
-			}
-			flushTable();
-			const t = line.trim();
-			if (!t) {
-				listStack = [];
-				blocks.push({ type: "paragraph", data: { text: "" } });
-				continue;
-			}
-
-			// Horizontal divider (delimiter): ---, ***, ___
-			if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(t)) {
-				listStack = [];
-				blocks.push({ type: "delimiter", data: {} });
-				continue;
-			}
-
-			// Standalone image: ![alt](url)
-			const imgMatch = t.match(/^!\[([^\]]*)\]\(((?:[^()]+|\([^()]*\)+))\)$/);
-			if (imgMatch) {
-				listStack = [];
-				blocks.push({
-					type: "image",
-					data: {
-						url: imgMatch[2],
-						caption: md2h(imgMatch[1])
-					}
-				});
-				continue;
-			}
-
-			// Headings H1 to H6
-			if (t.startsWith("###### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(7)), level: 6 } }); }
-			else if (t.startsWith("##### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(6)), level: 5 } }); }
-			else if (t.startsWith("#### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } }); }
-			else if (t.startsWith("### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } }); }
-			else if (t.startsWith("## ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } }); }
-			else if (t.startsWith("# ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(2)), level: 1 } }); }
-			// Alerts / Callouts: > [!NOTE] or > [!WARNING] or > [!TIP] etc.
-			else if (/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(t)) {
-				listStack = [];
-				const alertMatch = t.match(/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i);
-				const alertType = alertMatch[1].toUpperCase();
-				const alertTitle = alertMatch[2] ? md2h(alertMatch[2]) : (alertType.charAt(0) + alertType.slice(1).toLowerCase());
-				blocks.push({
-					type: "warning",
-					data: {
-						title: alertTitle,
-						message: ""
-					}
-				});
-			}
-			else if (t.startsWith("> ")) {
-				listStack = [];
-				const quoteText = md2h(t.slice(2));
-				const last = blocks[blocks.length - 1];
-				if (last?.type === "warning") {
-					last.data.message = last.data.message ? (last.data.message + "<br>" + quoteText) : quoteText;
-				} else if (last?.type === "quote") {
-					last.data.text = last.data.text ? (last.data.text + "<br>" + quoteText) : quoteText;
-				} else {
-					blocks.push({ type: "quote", data: { text: quoteText, caption: "" } });
-				}
-			}
-			else if (/^[ \t]*- \[[ xX]\] /.test(line)) {
-				listStack = [];
-				const checkMatch = line.match(/^[ \t]*- \[([ xX])\]\s*(.*)/);
-				const checked = checkMatch[1].toLowerCase() === "x";
-				const text = md2h(checkMatch[2]);
-				const last = blocks[blocks.length - 1];
-				if (last?.type === "checklist") last.data.items.push({ text, checked });
-				else blocks.push({ type: "checklist", data: { items: [{ text, checked }] } });
-			}
-			else {
-				// Check for unordered list (- or * or +) or ordered list (1. 2. etc.) (MD-03)
-				const ulMatch = line.match(/^([ \t]*)[-*+]\s+(.*)/);
-				const olMatch = line.match(/^([ \t]*)\d+\.\s+(.*)/);
-				if (ulMatch || olMatch) {
-					const isOrdered = !!olMatch;
-					const match = olMatch || ulMatch;
-					const rawIndent = match[1].replace(/\t/g, "  ").length;
-					const content = md2h(match[2]);
-					const style = isOrdered ? "ordered" : "unordered";
-
-					let lastBlock = blocks[blocks.length - 1];
-					if (!lastBlock || lastBlock.type !== "list") {
-						lastBlock = { type: "list", data: { style, items: [] } };
-						blocks.push(lastBlock);
-						listStack = [];
-					}
-
-					const newItem = { content, items: [] };
-					while (listStack.length > 0 && listStack[listStack.length - 1].indent >= rawIndent) {
-						listStack.pop();
-					}
-					if (listStack.length === 0) {
-						lastBlock.data.items.push(newItem);
-					} else {
-						listStack[listStack.length - 1].item.items.push(newItem);
-					}
-					listStack.push({ indent: rawIndent, item: newItem });
-				} else {
-					listStack = [];
-					blocks.push({ type: "paragraph", data: { text: md2h(line) } });
-				}
-			}
-		}
-		flushCode(); flushTable();
-		return blocks.length ? blocks : [{ type: "paragraph", data: { text: "" } }];
-	}
-
-	function md2h(s) {
-		if (!s) return "";
-		// Escape raw HTML entities first to prevent raw HTML/script injection (MD-01)
-		let res = escHtml(s);
-		// Restore allowed safe tags: <u> and <mark>
-		res = res.replace(/&lt;u&gt;(.*?)&lt;\/u&gt;/gi, '<u class="cdx-underline">$1</u>');
-		res = res.replace(/&lt;mark(?: class="cdx-marker")?&gt;(.*?)&lt;\/mark&gt;/gi, '<mark class="cdx-marker">$1</mark>');
-		// Markdown highlight syntax: ==text== -> <mark class="cdx-marker">text</mark>
-		res = res.replace(/==([^=]+)==/g, '<mark class="cdx-marker">$1</mark>');
-		// Convert Markdown image links ![alt](url)
-		res = res.replace(/!\[([^\]]*)\]\(((?:[^()]+|\([^()]*\))+)\)/g, (match, alt, url) => {
-			const safeUrl = sanitizeUrl(url);
-			if (safeUrl === "#") return alt;
-			return `<img src="${safeUrl}" alt="${alt}" style="max-width:100%; border-radius:6px; margin:4px 0;" />`;
-		});
-		// Convert Markdown links [text](url) -> <a href="url" target="_blank" rel="noopener">text</a>
-		res = res.replace(/\[([^\]]+)\]\(((?:[^()]+|\([^()]*\))+)\)/g, (match, text, url) => {
-			const safeUrl = sanitizeUrl(url);
-			if (safeUrl === "#") return `<a href="#" rel="noopener" onclick="return false;">${text}</a>`;
-			return `<a href="${safeUrl}" target="_blank" rel="noopener">${text}</a>`;
-		});
-		// Convert bold, italic, code
-		res = res.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/__(.*?)__/g, "<b>$1</b>")
-			.replace(/\*(.*?)\*/g, "<i>$1</i>").replace(/_(.*?)_/g, "<i>$1</i>")
-			.replace(/`(.*?)`/g, "<code>$1</code>");
-		return res;
-	}
-
-	function h2md(s) {
-		if (!s) return "";
-		return s
-			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*>/gi, "![$2]($1)")
-			.replace(/<img\s+[^>]*alt="([^"]*)"[^>]*src="([^"]*)"[^>]*>/gi, "![$1]($2)")
-			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*>/gi, "![]($1)")
-			.replace(/<a [^>]*href="(.*?)"[^>]*>(.*?)<\/a>/gi, (match, url, text) => {
-				if (url === "#") return text;
-				return `[${text}](${url})`;
-			})
-			.replace(/<mark[^>]*>(.*?)<\/mark>/gi, "==$1==")
-			.replace(/<u[^>]*>(.*?)<\/u>/gi, "%%%U_OPEN%%%$1%%%U_CLOSE%%%")
-			.replace(/<b>(.*?)<\/b>/gi, "**$1**").replace(/<strong>(.*?)<\/strong>/gi, "**$1**")
-			.replace(/<i>(.*?)<\/i>/gi, "*$1*").replace(/<em>(.*?)<\/em>/gi, "*$1*")
-			.replace(/<code[^>]*>(.*?)<\/code>/gi, "`$1`")
-			.replace(/<br\s*\/?>/gi, "\n")
-			.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
-			.replace(/<[^>]+>/g, "")
-			.replace(/%%%U_OPEN%%%/g, "<u>").replace(/%%%U_CLOSE%%%/g, "</u>");
-	}
-
-	function blocksToText(data) {
-		if (!data?.blocks) return "";
-		const lines = [];
-		for (const b of data.blocks) {
-			switch (b.type) {
-				case "header": lines.push("#".repeat(b.data.level || 1) + " " + h2md(b.data.text)); break;
-				case "paragraph": lines.push(h2md(b.data.text)); break;
-				case "delimiter": lines.push("---"); break;
-				case "image": {
-					const cap = h2md(b.data.caption || "").trim();
-					lines.push(`![${cap}](${b.data.url || ""})`);
-					break;
-				}
-				case "warning": {
-					const title = h2md(b.data.title || "").trim();
-					const msg = h2md(b.data.message || "").trim();
-					if (title && title.toLowerCase() !== "note") {
-						lines.push(`> [!NOTE] ${title}`);
-					} else {
-						lines.push(`> [!NOTE]`);
-					}
-					if (msg) {
-						msg.split("\n").forEach(l => lines.push(`> ${l}`));
-					}
-					break;
-				}
-				case "quote": {
-					const qText = h2md(b.data.text || "");
-					if (qText) {
-						qText.split("\n").forEach(l => lines.push(`> ${l}`));
-					} else {
-						lines.push(">");
-					}
-					if (b.data.caption) {
-						lines.push(`> — ${h2md(b.data.caption)}`);
-					}
-					break;
-				}
-				case "list":
-					(function extractItems(items, depth = 0, style = b.data.style || "unordered") {
-						(items || []).forEach((it, i) => {
-							const text = typeof it === "string" ? it : (it.content || it.text || "");
-							const indent = "  ".repeat(depth);
-							const prefix = style === "ordered" ? `${i + 1}. ` : "- ";
-							lines.push(indent + prefix + h2md(text));
-							if (it.items && it.items.length) {
-								extractItems(it.items, depth + 1, style);
-							}
-						});
-					})(b.data.items);
-					break;
-				case "checklist": (b.data.items || []).forEach(it => lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`)); break;
-				case "code":
-					const lang = b.data?.language ? b.data.language.trim() : "";
-					lines.push(`\`\`\`${lang}`, b.data?.code || "", "```");
-					break;
-				case "table":
-					if (b.data.content?.length) {
-						const withHeadings = b.data.withHeadings !== false;
-						b.data.content.forEach((r, i) => {
-							lines.push(`| ${r.map(c => h2md(c)).join(" | ")} |`);
-							if (i === 0 && withHeadings) {
-								lines.push(`| ${r.map(() => "---").join(" | ")} |`);
-							}
-						});
-					}
-					break;
-				default: if (b.data?.text) { lines.push(h2md(b.data.text)); } break;
-			}
-		}
-		return lines.join("\n").trim();
+		return KeepLocalMarkdown.textToBlocks(text);
 	}
 
 	window.textToBlocks = textToBlocks;
+
+	function md2h(s) {
+		return KeepLocalMarkdown.md2h(s);
+	}
+
+	function h2md(s) {
+		return KeepLocalMarkdown.h2md(s);
+	}
+
+	function blocksToText(data) {
+		return KeepLocalMarkdown.blocksToText(data);
+	}
+
 	window.blocksToText = blocksToText;
 
 	// ============================================================
@@ -2962,13 +2769,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 	async function initOrUpdateEditorJs(content) {
 		const blocks = textToBlocks(content);
 		if (editorInstance) {
-			try { await editorInstance.isReady; await editorInstance.render({ blocks }); return; }
-			catch (e) { try { editorInstance.destroy(); } catch (_) { } editorInstance = null; }
+			try {
+				await editorInstance.isReady;
+				await editorInstance.render({ blocks });
+				return;
+			} catch (e) {
+				try { editorInstance.destroy(); } catch (_) { }
+				editorInstance = null;
+			}
 		}
-		createEditorJsInstance(blocks);
+		await createEditorJsInstance(blocks);
 	}
 
-	function createEditorJsInstance(blocks) {
+	async function createEditorJsInstance(blocks) {
 		if (typeof EditorJS === "undefined") return;
 		editorjsWrapper.innerHTML = "";
 		const holder = document.createElement("div");
@@ -3065,20 +2878,113 @@ document.addEventListener("DOMContentLoaded", async () => {
 						title: "Image"
 					};
 				}
+				async onDropHandler(file) {
+					return compressImageFile(file);
+				}
+				async onPaste(e) {
+					switch (e.type) {
+						case "tag": {
+							const src = e.detail?.data?.src || "";
+							if (src.startsWith("data:image/")) {
+								const compressed = await compressDataUrl(src);
+								this.data = { url: compressed };
+							} else {
+								this.data = { url: src };
+							}
+							break;
+						}
+						case "pattern": {
+							this.data = { url: e.detail?.data || "" };
+							break;
+						}
+						case "file": {
+							const file = e.detail?.file;
+							if (file) {
+								const res = await this.onDropHandler(file);
+								this.data = res;
+							}
+							break;
+						}
+						default:
+							super.onPaste(e);
+					}
+				}
+				_acceptTuneView() {
+					this.tunes.forEach(tune => {
+						if (this.nodes?.imageHolder) {
+							const cls = this.CSS.imageHolder + "--" + tune.name.replace(/([A-Z])/g, t => `-${t[0].toLowerCase()}`);
+							this.nodes.imageHolder.classList.toggle(cls, !!this.data[tune.name]);
+						}
+						if (tune.name === "stretched") {
+							const block = (typeof this.api?.blocks?.getBlockByIndex === "function")
+								? (this.api.blocks.getBlockByIndex(this.blockIndex) || this.api.blocks.getBlockByIndex(this.api.blocks.getCurrentBlockIndex()))
+								: null;
+							if (block && typeof block.stretched !== "undefined") {
+								block.stretched = !!this.data.stretched;
+							}
+						}
+					});
+				}
 				render() {
 					const container = super.render();
+
+					// Add error and timeout handling so image never spins forever
+					const attachErrorHandler = () => {
+						if (!this.nodes?.image) return;
+						const imgEl = this.nodes.image;
+
+						const showError = () => {
+							const loader = container.querySelector(`.${this.CSS.loading}`);
+							if (loader) loader.remove();
+							container.classList.remove(this.CSS.loading);
+
+							if (!container.querySelector(".ce-image-error-box")) {
+								const errorBox = document.createElement("div");
+								errorBox.className = "ce-image-error-box";
+								errorBox.style.cssText = "display:flex; align-items:center; gap:8px; padding:10px 14px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:var(--text-danger, #ef4444); font-size:12px; margin:8px 0;";
+								const displayUrl = (this.data.url || "").length > 60 ? (this.data.url.slice(0, 60) + "…") : (this.data.url || "image");
+								errorBox.innerHTML = `
+									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="14" y2="16"/></svg>
+									<span>Unable to load image: <code style="font-size:11px; word-break:break-all;">${escHtml(displayUrl)}</code></span>
+								`;
+								container.appendChild(errorBox);
+							}
+							if (this.nodes.caption && !container.contains(this.nodes.caption)) {
+								container.appendChild(this.nodes.caption);
+							}
+						};
+
+						imgEl.addEventListener("error", showError);
+
+						if (this.data.url) {
+							// Set a fallback timeout of 7 seconds to avoid endless spinner on hanging connections
+							const timeoutId = setTimeout(() => {
+								const loader = container.querySelector(`.${this.CSS.loading}`);
+								if (loader) showError();
+							}, 7000);
+							imgEl.addEventListener("load", () => {
+								clearTimeout(timeoutId);
+								container.querySelector(".ce-image-error-box")?.remove();
+							}, { once: true });
+						}
+					};
+
+					attachErrorHandler();
+
 					if (!this.data.url) {
 						const urlInput = document.createElement("input");
 						urlInput.className = "cdx-input ce-image-url-input";
 						urlInput.placeholder = "Paste image URL and press Enter…";
 						urlInput.style.cssText = "margin-bottom: 8px;";
-						urlInput.addEventListener("keydown", (e) => {
+						urlInput.addEventListener("keydown", async (e) => {
 							if (e.key === "Enter") {
 								e.preventDefault();
 								const val = urlInput.value.trim();
 								if (val) {
-									this.data = { url: val, caption: this.data.caption || "" };
+									const finalUrl = val.startsWith("data:image/") ? await compressDataUrl(val) : val;
+									this.data = { url: finalUrl, caption: this.data.caption || "" };
 									urlInput.remove();
+									attachErrorHandler();
 								}
 							}
 						});
@@ -3159,6 +3065,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		});
 		window.editorInstance = editorInstance;
+		try {
+			await editorInstance.isReady;
+		} catch (e) {
+			console.warn("[KeepLocal] editorInstance.isReady error:", e);
+		}
 	}
 
 	async function loadFile() {
@@ -3201,17 +3112,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (editorMode === "block" && isMarkdown) {
 				editorjsWrapper.classList.remove("hidden");
 				plainWrapper.classList.add("hidden");
-				await initOrUpdateEditorJs(text);
+				showEditorLoading("Loading note…");
+				try {
+					await initOrUpdateEditorJs(text);
+				} catch (err) {
+					console.warn("[KeepLocal] Error initializing block editor, falling back to Plain mode:", err);
+					editorMode = "plain";
+					updateEditorModeUI();
+					plainWrapper.classList.remove("hidden");
+					editorjsWrapper.classList.add("hidden");
+				} finally {
+					hideEditorLoading();
+				}
 			} else {
+				hideEditorLoading();
 				plainWrapper.classList.remove("hidden");
 				editorjsWrapper.classList.add("hidden");
 			}
 			editorLoadedFileId = file.id;
 			if (editorStatusSpan) editorStatusSpan.textContent = (editorMode === "block" && isMarkdown) ? "Block Mode" : "Raw Text";
 		} else {
+			hideEditorLoading();
 			if (editorEmptyState) {
 				editorEmptyState.classList.remove("hidden");
-				if (window.lucide) lucide.createIcons();
+				if (window.lucide) window.lucide.createIcons();
 			}
 			editorjsWrapper?.classList.add("hidden");
 			plainWrapper?.classList.add("hidden");
@@ -3228,7 +3152,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		isInitEditor = false;
 		updateLineNumbers();
 		updateBreadcrumbs();
-		updateCodeHighlighting();
+		if (editorMode === "plain") {
+			updateCodeHighlighting();
+		}
 	}
 
 	// function updateCodeHighlighting() {
@@ -3306,6 +3232,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	// Sync overlay scroll
 	function updateCodeHighlighting() {
+		if (editorMode !== "plain") return;
 		const codeEl = document.getElementById("codeHighlightContent");
 		const preEl = document.getElementById("codeHighlightPre");
 
@@ -3356,6 +3283,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		let val = editorTextarea.value;
 		if (val.endsWith("\n")) val += " ";
+
+		// If document contains large base64 images, mask them for Prism display so regex never freezes
+		if (val.length > 40 * 1024 && val.includes("data:image/")) {
+			val = val.replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]{80,}/g, "data:image/...;base64,[image-data]");
+		}
+
 		codeEl.textContent = val;
 
 		const computed = getComputedStyle(editorTextarea);
@@ -3372,6 +3305,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (lineNumbersEl) {
 			lineNumbersEl.style.lineHeight = computed.lineHeight;
 		}
+
+		// Don't run heavy Prism regex on massive documents (>250KB) to ensure silky-smooth typing
+		if (val.length > 250 * 1024) return;
 
 		if (typeof Prism !== "undefined") {
 			try {
@@ -3689,49 +3625,68 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// INIT
 	// ============================================================
-	loadWorkspaceMeta();
-
-	// Migrate old data from previous single-workspace version
-	const oldFiles = localStorage.getItem("keeplocal_files");
-	const oldCfg = localStorage.getItem("keeplocal_config");
-	if (oldFiles && workspaces.length === 0) {
-		const wsId = uid("ws");
-		const migFiles = JSON.parse(oldFiles);
-		const migCfg = oldCfg ? JSON.parse(oldCfg) : {};
-		workspaces.push({
-			id: wsId, name: "My Notes", createdAt: Date.now(),
-			lastOpenedAt: Date.now(), folderName: null, fileCount: countAllFiles(migFiles)
-		});
-		try {
-			localStorage.setItem(`keeplocal_files_${wsId}`, oldFiles);
-			if (oldCfg) localStorage.setItem(`keeplocal_cfg_${wsId}`, oldCfg);
-		} catch (e) {
-			handleStorageError(e, "migration");
-		}
-		try {
-			localStorage.removeItem("keeplocal_files");
-			localStorage.removeItem("keeplocal_config");
-		} catch (_) { }
-		saveWorkspaceMeta();
-	}
+	await KeepLocalDB.migrateFromLocalStorage();
+	await loadWorkspaceMeta();
 
 	// Apply last saved theme
 	const globalTheme = localStorage.getItem("keeplocal_global_theme") || "dark";
 	theme = globalTheme;
 	document.body.setAttribute("data-theme", theme);
 
-	// Check for last active workspace or show welcome screen
-	const lastActiveWsId = localStorage.getItem("keeplocal_active_ws_id");
-	const targetWs = workspaces.find(w => w.id === lastActiveWsId);
+	// Parse initial route (supports #/workspaces, ?view=workspaces, ?safe=1, /workspaces, #/workspace/:id)
+	function getInitialRoute() {
+		const hash = (window.location.hash || "").replace(/^#\/?/, "").toLowerCase();
+		const search = new URLSearchParams(window.location.search);
+		const viewParam = (search.get("view") || "").toLowerCase();
+		const isSafe = search.has("safe") || search.has("recovery");
+		const path = window.location.pathname.toLowerCase();
 
-	if (targetWs) {
-		await openWorkspace(targetWs.id);
-	} else if (workspaces.length > 0) {
-		const sorted = [...workspaces].sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
-		await openWorkspace(sorted[0].id);
-	} else {
-		showWelcome();
+		if (isSafe || viewParam === "workspaces" || hash === "workspaces" || path.endsWith("/workspaces")) {
+			return { view: "workspaces" };
+		}
+		if (hash.startsWith("workspace/")) {
+			const wsId = window.location.hash.replace(/^#\/?workspace\//i, "").trim();
+			return { view: "editor", wsId };
+		}
+		return null;
 	}
+
+	const initialRoute = getInitialRoute();
+
+	if (initialRoute?.view === "workspaces") {
+		try { localStorage.removeItem("keeplocal_active_ws_id"); } catch (_) { }
+		showWelcome();
+	} else if (initialRoute?.view === "editor" && initialRoute.wsId) {
+		const targetWs = workspaces.find(w => w.id === initialRoute.wsId);
+		if (targetWs) {
+			await openWorkspace(targetWs.id);
+		} else {
+			showWelcome();
+		}
+	} else {
+		// Check for last active workspace or show welcome screen
+		const lastActiveWsId = localStorage.getItem("keeplocal_active_ws_id");
+		const targetWs = workspaces.find(w => w.id === lastActiveWsId);
+
+		if (targetWs) {
+			await openWorkspace(targetWs.id);
+		} else {
+			showWelcome();
+		}
+	}
+
+	// Listen for route changes (e.g. Back/Forward browser navigation)
+	window.addEventListener("hashchange", () => {
+		const currentHash = (window.location.hash || "").replace(/^#\/?/, "").toLowerCase();
+		if (currentHash === "workspaces" && activeWsId) {
+			goHome();
+		} else if (currentHash.startsWith("workspace/")) {
+			const wsId = window.location.hash.replace(/^#\/?workspace\//i, "").trim();
+			if (wsId && wsId !== activeWsId) {
+				openWorkspace(wsId);
+			}
+		}
+	});
 
 	// First time visit: show product onboarding & help modal
 	const hasSeenHelp = localStorage.getItem("keeplocal_help_seen");
