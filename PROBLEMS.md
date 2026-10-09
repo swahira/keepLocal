@@ -17,7 +17,8 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 | **Styling, Dead Code & CSS Defects** | 5 | 0 | 1 | 2 | 2 |
 | **Accessibility, Responsiveness & Shortcuts** | 5 | 0 | 1 | 2 | 2 |
 | **Architecture, Offline & Security** | 4 | 1 | 1 | 1 | 1 |
-| **Total** | **48** | **7** | **19** | **17** | **5** |
+| **Post-IndexedDB Migration Engine Audit** | 14 | 2 | 7 | 5 | 0 |
+| **Total** | **62** | **9** | **26** | **22** | **5** |
 
 ---
 
@@ -535,3 +536,105 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Problem Description:** The README refers to the application as `localKeep` rather than `KeepLocal`, and its "Known Limitations" section claims "The Tab key does not insert a tab character in the editor", which is no longer accurate.
   - **Impact:** Misleading project branding and inaccurate developer documentation.
   - **How to Fix:** Update `README.md` with accurate branding (`KeepLocal`) and current feature capabilities.
+
+---
+
+## 10. Post-IndexedDB Migration Engine Audit (October 2026)
+
+- [x] **AUDIT-01: Disastrous Disk File Deletion on Folder Rename** (FIXED)
+  - **Severity:** Critical (Data Loss)
+  - **Location:** [`js/script.js#L2176-L2196`](file:///home/raja/Workspace/keepLocal/js/script.js#L2176-L2196) (`beginInlineRename`)
+  - **Problem Description:** Renaming a folder queued the old folder name for deletion on disk and cleared `_diskContent` on `n`, but never cleared `_diskContent` on `n`'s child files. During disk sync, the old folder was deleted from disk, the new folder was created, but child files were skipped because `_diskContent === content`, permanently wiping all files inside the folder from the hard drive.
+  - **Impact:** Complete data loss of all files inside any renamed folder on local disk.
+  - **How to Fix:** Recursively clear `_diskContent` on `n` and all its descendants in `beginInlineRename()`.
+
+- [x] **AUDIT-02: Single Quotes & Contractions Corrupted into HTML Entities `&#39;` and `&amp;#39;`** (FIXED)
+  - **Severity:** Critical (Data Corruption)
+  - **Location:** [`js/markdown.js#L286-L289`](file:///home/raja/Workspace/keepLocal/js/markdown.js#L286-L289) (`h2md`)
+  - **Problem Description:** `escHtml` encoded `'` into `&#39;`, but `h2md` only decoded `&nbsp;`, `&amp;`, `&lt;`, `&gt;`, `&quot;`, completely omitting `&#39;` and `&#039;`. Every contraction (`it's`, `don't`, `user's`) became `&#39;`, and compounded into `&amp;#39;` upon subsequent saves in Block Mode.
+  - **Impact:** Irreversible text corruption across all notes containing single quotes or contractions.
+  - **How to Fix:** Add decoding for `&(?:#39|#039);` in `h2md()`.
+
+- [x] **AUDIT-03: Modal Cancellation via Escape or Backdrop Freezes Async Dialog Workflows** (FIXED)
+  - **Severity:** High (UI Freeze)
+  - **Location:** [`js/script.js#L1485-L1502`](file:///home/raja/Workspace/keepLocal/js/script.js#L1485-L1502)
+  - **Problem Description:** Dismissing choice dialogs via Escape, backdrop click, or Cancel button called `hideModal()` directly, wiping `modalCb = null` without invoking the callback. Workflows waiting on `showChoiceModal` (such as folder reconnection prompts) hung forever.
+  - **Impact:** Asynchronous dialog workflows freeze indefinitely upon dismissing modals.
+  - **How to Fix:** Invoke `if (modalCb) modalCb(false);` prior to `hideModal()`.
+
+- [x] **AUDIT-04: Folder Explorer Click Overwrites `selectedId`, Breaking Editor Line Numbers & Breadcrumbs** (FIXED)
+  - **Severity:** High (UX Disruption)
+  - **Location:** [`js/script.js#L2625-L2635`](file:///home/raja/Workspace/keepLocal/js/script.js#L2625-L2635) (`renderTree`) & [`js/script.js#L2704-L2708`](file:///home/raja/Workspace/keepLocal/js/script.js#L2704-L2708) (`updateBreadcrumbs`)
+  - **Problem Description:** Clicking a folder to expand/collapse set `selectedId = node.id`. Because `selectedId` was now a folder, subsequent keystrokes in Plain Text mode caused all line numbers to vanish, cursor coordinates displayed `—`, and mode switching was disabled.
+  - **Impact:** Editor line numbers vanish and active note state desynchronizes when navigating folders.
+  - **How to Fix:** Toggle folder `isOpen` without reassigning `selectedId` to folder IDs.
+
+- [x] **AUDIT-05: GitHub Alert / Callout Types Degraded to `NOTE` on Save** (FIXED)
+  - **Severity:** High (Data Loss)
+  - **Location:** [`js/markdown.js#L400-L408`](file:///home/raja/Workspace/keepLocal/js/markdown.js#L400-L408) (`textToBlocks`) & [`js/markdown.js#L500-L515`](file:///home/raja/Workspace/keepLocal/js/markdown.js#L500-L515) (`blocksToText`)
+  - **Problem Description:** `textToBlocks` parsed `[!WARNING]`, `[!TIP]`, `[!IMPORTANT]`, and `[!CAUTION]` into warning blocks but omitted `alertType`. `blocksToText` hardcoded `> [!NOTE]`, permanently degrading all alert types.
+  - **Impact:** Custom alert variants are destroyed and replaced with generic `NOTE`.
+  - **How to Fix:** Retain `alertType` in block data and restore `> [!${alertType}]` in `blocksToText()`.
+
+- [x] **AUDIT-06: Table Delimiter Forced on Tables Without Headings (MD-04 Regression)** (FIXED)
+  - **Severity:** High (Markdown Format Corruption)
+  - **Location:** [`js/markdown.js#L550-L558`](file:///home/raja/Workspace/keepLocal/js/markdown.js#L550-L558) (`blocksToText`)
+  - **Problem Description:** In `blocksToText`, line 555 unconditionally emitted `| --- | --- |` under row 0, ignoring `b.data.withHeadings === false`.
+  - **Impact:** Headerless tables were automatically converted into tables with headings on roundtrip.
+  - **How to Fix:** Only emit the header delimiter row when `b.data.withHeadings !== false`.
+
+- [x] **AUDIT-07: Unsaved Block Mode Debounce Edits Lost on Tab Close or Refresh** (FIXED)
+  - **Severity:** High (Data Loss)
+  - **Location:** [`js/script.js#L3614-L3621`](file:///home/raja/Workspace/keepLocal/js/script.js#L3614-L3621) (`beforeunload`)
+  - **Problem Description:** When editing in Block Mode, typing edits are debounced by 400ms. Closing or reloading the tab before the timer fired discarded pending edits without warning because `beforeunload` omitted browser prompt triggers.
+  - **Impact:** Loss of recently typed characters on quick page navigation or reload.
+  - **How to Fix:** Trigger standard `e.preventDefault()` / `e.returnValue = ""` in `beforeunload` when `editorSaveTimer !== null`.
+
+- [x] **AUDIT-08: Global Theme Overridden by Per-Workspace Config** (FIXED)
+  - **Severity:** Medium (UX Inconsistency)
+  - **Location:** [`js/script.js#L340-L345`](file:///home/raja/Workspace/keepLocal/js/script.js#L340-L345) (`loadWsConfig`)
+  - **Problem Description:** Opening a workspace with a saved dark theme reset the active theme even if the user had set the global theme to light via `toggleTheme()`.
+  - **Impact:** Reverts user theme preference on workspace switch.
+  - **How to Fix:** Prioritize `keeplocal_global_theme` from `localStorage` in `loadWsConfig()`.
+
+- [x] **AUDIT-09: Mathematical Expressions and Inline Code Mangled by Greedy Emphasis** (FIXED)
+  - **Severity:** Medium (Markdown Parsing Fidelity)
+  - **Location:** [`js/markdown.js#L256-L272`](file:///home/raja/Workspace/keepLocal/js/markdown.js#L256-L272) (`md2h`)
+  - **Problem Description:** Inline code `` `...` `` was parsed after bold and italics, transforming asterisks inside backticks into `<i>`. Unbounded asterisk regex also converted math expressions like `x * y * z` into italics.
+  - **Impact:** Code and math formulas were mangled with unexpected `<i>` tags.
+  - **How to Fix:** Mask inline code before emphasis replacement and guard asterisks with non-whitespace boundaries.
+
+- [x] **AUDIT-10: Capitalized Checklist `[X]` Not Recognized** (FIXED)
+  - **Severity:** Medium (CommonMark Compatibility)
+  - **Location:** [`js/markdown.js#L420-L425`](file:///home/raja/Workspace/keepLocal/js/markdown.js#L420-L425) (`textToBlocks`)
+  - **Problem Description:** Only lowercase `- [x] ` was matched; uppercase `- [X] ` fell through to bullet list parsing.
+  - **Impact:** Capitalized checklist items lost interactive checkbox format.
+  - **How to Fix:** Allow both `[x]` and `[X]` in checklist prefix detection.
+
+- [x] **AUDIT-11: IndexedDB Early Transaction Resolution in `withStore`** (FIXED)
+  - **Severity:** Medium (Storage Reliability)
+  - **Location:** [`js/db.js#L100-L130`](file:///home/raja/Workspace/keepLocal/js/db.js#L100-L130) (`withStore`)
+  - **Problem Description:** `withStore` resolved write transactions on `req.onsuccess` before `tx.oncomplete` committed to disk, and did not attach `tx.onerror` / `tx.onabort` handlers when `result.onsuccess` was present.
+  - **Impact:** Silent write failures and unhandled transaction errors on commit quota aborts.
+  - **How to Fix:** Resolve readwrite transactions on `tx.oncomplete` and always attach error/abort handlers.
+
+- [x] **AUDIT-12: ZIP Import Path Traversal (Zip Slip) & OS-Illegal Filenames** (FIXED)
+  - **Severity:** High (Security & Disk Sync Crash)
+  - **Location:** [`js/script.js#L786-L822`](file:///home/raja/Workspace/keepLocal/js/script.js#L786-L822) (`handleWelcomeImport`), [`js/script.js#L2290-L2330`](file:///home/raja/Workspace/keepLocal/js/script.js#L2290-L2330) (`handleImport`), and [`js/markdown.js#L573-L596`](file:///home/raja/Workspace/keepLocal/js/markdown.js#L573-L596) (`resolveSafeZipPath`)
+  - **Problem Description:** When importing ZIP archives, `path.split("/")` was used without path segment sanitization. Archives containing directory traversal (`..`, `.`) escaped the tree structure or created folders named `..`, and entries with OS-illegal characters (`\ / : * ? " < > |`) were pushed directly into the node tree. When synced to disk with the File System Access API, Chrome throws `TypeError: Failed to execute 'getFileHandle'/'getDirectoryHandle': The name contains invalid characters`, permanently breaking disk sync for the workspace. Duplicate filenames within the same folder were also silently dropped without warning.
+  - **Impact:** Path traversal vulnerability, fatal crashes on local disk sync, and silent data loss of duplicate-named imported files.
+  - **How to Fix:** Implement `resolveSafeZipPath(rawPath)`: normalize slashes, split segments, guard against `..` root escape using stack resolution, ignore `.` / empty segments, sanitize illegal characters with `_`, and preserve duplicate filenames using `uniqueNodeName(arr, fname)`.
+
+- [x] **AUDIT-13: Workspace Name Trimming & Live Header/Title Synchronization** (FIXED)
+  - **Severity:** Medium (UX Consistency & State Desynchronization)
+  - **Location:** [`js/script.js#L621-L640`](file:///home/raja/Workspace/keepLocal/js/script.js#L621-L640) (`createNewWorkspace`) & [`js/script.js#L847-L865`](file:///home/raja/Workspace/keepLocal/js/script.js#L847-L865) (`renameWorkspace`)
+  - **Problem Description:** `createNewWorkspace` and `renameWorkspace` did not sanitize input with `.trim()`, allowing whitespace-only names (`"   "`). When renaming the currently active workspace from the dropdown or cards, `sidebarWsName` and `document.title` were not updated to reflect the new workspace name until a complete page reload.
+  - **Impact:** Empty/blank workspace titles and stale UI labels after renaming the active workspace.
+  - **How to Fix:** Trim names in `createNewWorkspace` and `renameWorkspace`, disallow empty strings, and synchronously update `sidebarWsName.textContent` and `document.title` if `wsId === activeWsId`.
+
+- [x] **AUDIT-14: Dangling Zombie State on Active Workspace Deletion** (FIXED)
+  - **Severity:** High (State Inconsistency & Storage Leak)
+  - **Location:** [`js/script.js#L867-L895`](file:///home/raja/Workspace/keepLocal/js/script.js#L867-L895) (`deleteWorkspace`)
+  - **Problem Description:** When deleting a workspace via `deleteWorkspace(wsId)`, if that workspace was currently active (`wsId === activeWsId`), `localStorage.getItem("keeplocal_active_ws_id")` was left pointing to the deleted ID, and `activeWsId`, `workspaceHandle`, `files`, `openTabs`, and `selectedId` were not reset. The editor remained open on the deleted workspace, and any further user keystrokes resurrected deleted data into IndexedDB.
+  - **Impact:** Stale editor state, zombie data resurrection in IndexedDB, and broken startup routing.
+  - **How to Fix:** In `deleteWorkspace(wsId)`, check if `localStorage.getItem("keeplocal_active_ws_id") === wsId` and remove it; if `activeWsId === wsId`, reset `activeWsId = null`, `workspaceHandle = null`, `fsPermissionGranted = false`, `files = []`, `selectedId = null`, `openTabs = []`, `editorLoadedFileId = null`, destroy `editorInstance`, and navigate to `showWelcome()`.
