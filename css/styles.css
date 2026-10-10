@@ -1120,6 +1120,7 @@ button {
 	user-select: none;
 	overflow: hidden;
 	box-sizing: border-box;
+	cursor: pointer;
 }
 
 .code-editor-area {
@@ -1127,6 +1128,7 @@ button {
 	height: 100%;
 	position: relative;
 	overflow: hidden;
+	cursor: text;
 }
 
 #codeHighlightPre {
@@ -1181,11 +1183,12 @@ button {
 
 	background: transparent;
 	color: transparent;
-	caret-color: var(--text-primary);
+	caret-color: var(--accent-color);
 
 	resize: none;
 	border: none;
 	outline: none;
+	cursor: text;
 }
 
 /* Word Wrap Mode */

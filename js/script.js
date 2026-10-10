@@ -3212,6 +3212,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 		updateEditorModeUI();
 		if (activeWsId) saveWsConfig(activeWsId);
 		await loadFile();
+		if (mode === "plain" && editorTextarea && !editorTextarea.disabled) {
+			editorTextarea.focus();
+			updateCursor();
+		}
 	};
 
 	async function initOrUpdateEditorJs(content) {
@@ -3711,6 +3715,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 				hideEditorLoading();
 				plainWrapper.classList.remove("hidden");
 				editorjsWrapper.classList.add("hidden");
+				if (editorTextarea && !editorTextarea.disabled) {
+					setTimeout(() => {
+						if (!modalOverlay?.classList.contains("active") && !helpModalOverlay?.classList.contains("active") && document.activeElement !== searchInputEl) {
+							editorTextarea.focus();
+							updateCursor();
+						}
+					}, 40);
+				}
 			}
 			editorLoadedFileId = file.id;
 			if (editorStatusSpan) editorStatusSpan.textContent = (editorMode === "block" && isMarkdown) ? "Block Mode" : "Raw Text";
@@ -4013,10 +4025,42 @@ document.addEventListener("DOMContentLoaded", async () => {
 				}
 			}
 		}
+		if (e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End" || e.key === "PageUp" || e.key === "PageDown") {
+			requestAnimationFrame(updateCursor);
+		}
 	});
 	editorTextarea.addEventListener("keyup", updateCursor);
 	editorTextarea.addEventListener("click", updateCursor);
 	editorTextarea.addEventListener("focus", updateCursor);
+
+	document.addEventListener("selectionchange", () => {
+		if (document.activeElement === editorTextarea) {
+			updateCursor();
+		}
+	});
+
+	plainWrapper?.addEventListener("click", (e) => {
+		if (e.target !== editorTextarea && editorTextarea && !editorTextarea.disabled) {
+			editorTextarea.focus();
+			updateCursor();
+		}
+	});
+
+	lineNumbersEl?.addEventListener("click", (e) => {
+		if (!editorTextarea || editorTextarea.disabled) return;
+		editorTextarea.focus();
+		const computed = getComputedStyle(editorTextarea);
+		const lineHeight = parseFloat(computed.lineHeight) || 20;
+		const clickY = e.offsetY + (lineNumbersEl.scrollTop || 0);
+		const targetLineIdx = Math.max(0, Math.floor((clickY - 12) / lineHeight));
+		const lines = editorTextarea.value.split("\n");
+		let pos = 0;
+		for (let i = 0; i < Math.min(targetLineIdx, lines.length); i++) {
+			pos += lines[i].length + 1;
+		}
+		editorTextarea.setSelectionRange(pos, pos);
+		updateCursor();
+	});
 
 	editorTextarea.addEventListener("paste", async (e) => {
 		const items = e.clipboardData?.items;
