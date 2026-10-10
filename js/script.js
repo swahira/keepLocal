@@ -20,7 +20,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	let importIdCounter = 0;
 	let workspaceHandle = null;  // FileSystemDirectoryHandle
 	let fsPermissionGranted = false; // true if workspaceHandle has granted readwrite permission
-	let editorMode = "block";
+	let editorMode = (typeof localStorage !== "undefined" && localStorage.getItem("keeplocal_editor_mode")) || "block";
 	let editorInstance = null;
 	let isInitEditor = false;
 	let editorLoadedFileId = null;
@@ -56,6 +56,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	const modeSwitchGroup = document.getElementById("modeSwitchGroup");
 	const modeBlockBtn = document.getElementById("modeBlockBtn");
 	const modePlainBtn = document.getElementById("modePlainBtn");
+	const textControlsGroup = document.getElementById("textControlsGroup");
 	const editorLoadingOverlay = document.getElementById("editorLoadingOverlay");
 	const editorLoadingText = document.getElementById("editorLoadingText");
 
@@ -74,6 +75,29 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (!filename) return false;
 		const ext = filename.split(".").pop()?.toLowerCase();
 		return ext === "md" || ext === "markdown";
+	}
+
+	function isImageFile(filename) {
+		if (!filename) return false;
+		const ext = filename.split(".").pop()?.toLowerCase();
+		return ["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp", "ico", "avif"].includes(ext);
+	}
+
+	function getImageMimeType(filename) {
+		if (!filename) return "image/png";
+		const ext = filename.split(".").pop()?.toLowerCase();
+		const map = {
+			webp: "image/webp",
+			png: "image/png",
+			jpg: "image/jpeg",
+			jpeg: "image/jpeg",
+			gif: "image/gif",
+			svg: "image/svg+xml",
+			bmp: "image/bmp",
+			ico: "image/x-icon",
+			avif: "image/avif"
+		};
+		return map[ext] || "image/png";
 	}
 
 	// ============================================================
@@ -345,7 +369,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					? Number(c.fontSize)
 					: 13;
 				selectedId = c.selectedId || null;
-				editorMode = c.editorMode || "block";
+				editorMode = c.editorMode || (typeof localStorage !== "undefined" && localStorage.getItem("keeplocal_editor_mode")) || "block";
 				openTabs = Array.isArray(c.openTabs) ? c.openTabs : [];
 				isWordWrap = !!c.isWordWrap;
 				if (c.sidebarWidth) {
@@ -810,14 +834,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			// Asynchronously read all file contents
 			await Promise.all(fileEntries.map(async ({ path, entry }) => {
-				const content = await entry.async("string");
 				const parts = resolveSafeZipPath(path);
 				const fname = parts.pop();
 				if (!fname) return;
+				const isImg = isImageFile(fname);
+				let content;
+				if (isImg) {
+					content = await entry.async("blob");
+				} else {
+					content = await entry.async("string");
+				}
 				const dirPath = parts.join("/");
 				const arr = folders[dirPath] || importedFiles;
 				const safeName = uniqueNodeName(arr, fname);
-				arr.push({ id: uid("file"), name: safeName, type: "file", content });
+				arr.push({
+					id: uid("file"),
+					name: safeName,
+					type: "file",
+					content,
+					isBinary: isImg,
+					mimeType: isImg ? getImageMimeType(fname) : "text/plain"
+				});
 			}));
 
 			// Only instantiate and persist workspace after successful load (ZIP-03)
@@ -914,6 +951,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 				saveWsFiles(activeWsId);
 				saveWsConfig(activeWsId);
 				updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
+				if (typeof attachmentBlobUrlMap !== "undefined") {
+					attachmentBlobUrlMap.forEach(url => URL.revokeObjectURL(url));
+					attachmentBlobUrlMap.clear();
+				}
 			}
 
 			activeWsId = wsId;
@@ -1036,6 +1077,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (!idToSave) return;
 		const f = findNode(files, idToSave);
 		if (!f || f.type !== "file") return;
+		if (isImageFile(f.name) || f.isBinary) return; // Binary images are not overwritten by text editor
 		const isMarkdown = isMarkdownFile(f.name);
 		if (editorMode === "block" && isMarkdown && editorInstance) {
 			try {
@@ -1163,13 +1205,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function updateEditorModeUI() {
 		const f = selectedId ? findNode(files, selectedId) : null;
 		const hasFile = !!(f && f.type === "file");
-		const isMarkdown = hasFile && isMarkdownFile(f.name);
+		const isImg = hasFile && isImageFile(f.name);
+		const isMarkdown = hasFile && !isImg && isMarkdownFile(f.name);
 
 		if (modeSwitchGroup) {
 			if (isMarkdown) {
 				modeSwitchGroup.classList.remove("hidden");
 			} else {
 				modeSwitchGroup.classList.add("hidden");
+			}
+		}
+
+		if (textControlsGroup) {
+			if (hasFile && !isImg) {
+				textControlsGroup.classList.remove("hidden");
+			} else {
+				textControlsGroup.classList.add("hidden");
 			}
 		}
 
@@ -1384,6 +1435,324 @@ document.addEventListener("DOMContentLoaded", async () => {
 	function flattenNodes(nodes, out = []) {
 		for (const n of nodes) { out.push(n); if (n.children) flattenNodes(n.children, out); }
 		return out;
+	}
+
+	// ============================================================
+	// ATTACHMENTS & IMAGE MANAGEMENT
+	// ============================================================
+	const attachmentBlobUrlMap = new Map();
+	if (typeof window !== "undefined") {
+		window.attachmentBlobUrlMap = attachmentBlobUrlMap;
+	}
+
+	function resolveAttachmentUrl(url) {
+		if (!url || typeof url !== "string") return "";
+		const trimmed = url.trim();
+		if (/^(?:https?:\/\/|data:|blob:)/i.test(trimmed)) {
+			return trimmed;
+		}
+
+		if (attachmentBlobUrlMap.has(trimmed)) {
+			return attachmentBlobUrlMap.get(trimmed);
+		}
+
+		const cleanPath = trimmed.replace(/^(\.\/|\/)/, "");
+		if (attachmentBlobUrlMap.has(cleanPath)) {
+			return attachmentBlobUrlMap.get(cleanPath);
+		}
+		try {
+			const decPath = decodeURIComponent(cleanPath);
+			if (attachmentBlobUrlMap.has(decPath)) {
+				return attachmentBlobUrlMap.get(decPath);
+			}
+		} catch (_) { }
+
+		const parts = cleanPath.split("/").map(p => {
+			try { return decodeURIComponent(p); } catch (_) { return p; }
+		});
+		const targetFilename = (parts[parts.length - 1] || "").split("?")[0].split("#")[0];
+		if (!targetFilename) return "";
+
+		if (attachmentBlobUrlMap.has(targetFilename)) {
+			return attachmentBlobUrlMap.get(targetFilename);
+		}
+
+		let targetNode = null;
+		const attachmentsFolder = files.find(n => n.type === "folder" && n.name.toLowerCase() === "attachments");
+		if (attachmentsFolder && attachmentsFolder.children) {
+			targetNode = attachmentsFolder.children.find(n => n.type === "file" && n.name.toLowerCase() === targetFilename.toLowerCase());
+		}
+		if (!targetNode) {
+			const allNodes = flattenNodes(files);
+			targetNode = allNodes.find(n => n.type === "file" && n.name.toLowerCase() === targetFilename.toLowerCase());
+		}
+
+		if (targetNode) {
+			if (targetNode.content instanceof Blob) {
+				let existing = attachmentBlobUrlMap.get(targetNode.id);
+				if (!existing) {
+					existing = URL.createObjectURL(targetNode.content);
+					attachmentBlobUrlMap.set(targetNode.id, existing);
+					attachmentBlobUrlMap.set(`attachments/${targetNode.name}`, existing);
+					attachmentBlobUrlMap.set(`./attachments/${targetNode.name}`, existing);
+					attachmentBlobUrlMap.set(`/attachments/${targetNode.name}`, existing);
+					attachmentBlobUrlMap.set(targetNode.name, existing);
+				}
+				return existing;
+			} else if (typeof targetNode.content === "string") {
+				if (targetNode.content.startsWith("data:image/")) {
+					return targetNode.content;
+				} else if (targetNode.content) {
+					const dataUrl = `data:${targetNode.mimeType || getImageMimeType(targetNode.name)};base64,${targetNode.content}`;
+					attachmentBlobUrlMap.set(targetNode.id, dataUrl);
+					attachmentBlobUrlMap.set(`attachments/${targetNode.name}`, dataUrl);
+					attachmentBlobUrlMap.set(`./attachments/${targetNode.name}`, dataUrl);
+					attachmentBlobUrlMap.set(targetNode.name, dataUrl);
+					return dataUrl;
+				}
+			} else if (targetNode.content instanceof ArrayBuffer || (targetNode.content && targetNode.content.buffer instanceof ArrayBuffer)) {
+				let existing = attachmentBlobUrlMap.get(targetNode.id);
+				if (!existing) {
+					const blob = new Blob([targetNode.content], { type: targetNode.mimeType || getImageMimeType(targetNode.name) });
+					existing = URL.createObjectURL(blob);
+					attachmentBlobUrlMap.set(targetNode.id, existing);
+					attachmentBlobUrlMap.set(`attachments/${targetNode.name}`, existing);
+					attachmentBlobUrlMap.set(`./attachments/${targetNode.name}`, existing);
+					attachmentBlobUrlMap.set(`/attachments/${targetNode.name}`, existing);
+					attachmentBlobUrlMap.set(targetNode.name, existing);
+				}
+				return existing;
+			}
+		}
+
+		return "";
+	}
+	if (typeof window !== "undefined") {
+		window.resolveAttachmentUrl = resolveAttachmentUrl;
+	}
+
+	async function imageToWebpBlob(source, quality = 0.82, maxWidth = 1920, maxHeight = 1920) {
+		if (source instanceof Blob && source.type === "image/svg+xml") {
+			return { blob: source, ext: "svg", mimeType: "image/svg+xml" };
+		}
+		if (typeof source === "string" && source.startsWith("data:image/svg+xml")) {
+			const parts = source.split(",");
+			const decoded = decodeURIComponent(parts[1] || "");
+			const blob = new Blob([decoded], { type: "image/svg+xml" });
+			return { blob, ext: "svg", mimeType: "image/svg+xml" };
+		}
+
+		return new Promise((resolve) => {
+			let srcUrl = "";
+			let isObjUrl = false;
+			if (source instanceof Blob) {
+				srcUrl = URL.createObjectURL(source);
+				isObjUrl = true;
+			} else if (typeof source === "string") {
+				srcUrl = source;
+			}
+
+			const img = new Image();
+			img.onload = () => {
+				if (isObjUrl) URL.revokeObjectURL(srcUrl);
+				let { width, height } = img;
+				if (width > maxWidth || height > maxHeight) {
+					const ratio = Math.min(maxWidth / width, maxHeight / height);
+					width = Math.round(width * ratio);
+					height = Math.round(height * ratio);
+				}
+				const canvas = document.createElement("canvas");
+				canvas.width = Math.max(1, width);
+				canvas.height = Math.max(1, height);
+				const ctx = canvas.getContext("2d");
+				ctx.drawImage(img, 0, 0, width, height);
+
+				canvas.toBlob((blob) => {
+					if (blob) {
+						resolve({ blob, ext: "webp", mimeType: "image/webp" });
+					} else {
+						canvas.toBlob((fallbackBlob) => {
+							resolve({
+								blob: fallbackBlob || (source instanceof Blob ? source : new Blob([])),
+								ext: fallbackBlob?.type === "image/png" ? "png" : "jpeg",
+								mimeType: fallbackBlob?.type || "image/jpeg"
+							});
+						}, "image/jpeg", quality);
+					}
+				}, "image/webp", quality);
+			};
+			img.onerror = () => {
+				if (isObjUrl) URL.revokeObjectURL(srcUrl);
+				if (source instanceof Blob) {
+					const ext = source.type.split("/")[1] || "png";
+					resolve({ blob: source, ext, mimeType: source.type });
+				} else {
+					resolve({ blob: new Blob([]), ext: "png", mimeType: "image/png" });
+				}
+			};
+			img.src = srcUrl;
+		});
+	}
+
+	function getOrCreateAttachmentsFolder() {
+		let folder = files.find(n => n.type === "folder" && n.name.toLowerCase() === "attachments");
+		if (!folder) {
+			folder = {
+				id: uid("folder"),
+				name: "attachments",
+				type: "folder",
+				isOpen: true,
+				children: []
+			};
+			files.push(folder);
+		}
+		return folder;
+	}
+
+	async function saveImageToAttachments(fileOrDataUrl, preferredName = "") {
+		const { blob, ext, mimeType } = await imageToWebpBlob(fileOrDataUrl);
+		const now = new Date();
+		const pad = (n) => String(n).padStart(2, "0");
+		const dateStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+
+		let baseName = preferredName ? preferredName.replace(/\.[^.]+$/, "") : `image_${dateStr}`;
+		baseName = baseName.replace(/[/\\:*?"<>|]/g, "_").trim() || `image_${dateStr}`;
+		const filename = `${baseName}.${ext}`;
+
+		const folder = getOrCreateAttachmentsFolder();
+		const safeName = uniqueNodeName(folder.children, filename);
+
+		const fileNode = {
+			id: uid("file"),
+			name: safeName,
+			type: "file",
+			isBinary: true,
+			mimeType: mimeType || "image/webp",
+			content: blob,
+			size: blob.size,
+			_diskContent: null
+		};
+
+		folder.children.push(fileNode);
+
+		if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+			try {
+				const blobUrl = URL.createObjectURL(blob);
+				attachmentBlobUrlMap.set(fileNode.id, blobUrl);
+				attachmentBlobUrlMap.set(`attachments/${safeName}`, blobUrl);
+				attachmentBlobUrlMap.set(`./attachments/${safeName}`, blobUrl);
+				attachmentBlobUrlMap.set(safeName, blobUrl);
+			} catch (_) { }
+		}
+
+		persistCurrent();
+		render();
+		if (workspaceHandle) {
+			syncWorkspace();
+		}
+
+		return `attachments/${safeName}`;
+	}
+	if (typeof window !== "undefined") {
+		window.saveImageToAttachments = saveImageToAttachments;
+	}
+
+	function loadImageInViewer(file) {
+		const imgEl = document.getElementById("imageViewerImg");
+		const infoEl = document.getElementById("imageViewerInfo");
+		const copyBtn = document.getElementById("imageViewerCopyBtn");
+		const downloadBtn = document.getElementById("imageViewerDownloadBtn");
+		if (!imgEl) return;
+
+		let srcUrl = "";
+		let blobToUse = null;
+
+		if (file.content instanceof Blob) {
+			blobToUse = file.content;
+			srcUrl = resolveAttachmentUrl(file.name);
+			if (!srcUrl) {
+				srcUrl = URL.createObjectURL(file.content);
+				attachmentBlobUrlMap.set(file.id, srcUrl);
+				attachmentBlobUrlMap.set(`attachments/${file.name}`, srcUrl);
+				attachmentBlobUrlMap.set(`./attachments/${file.name}`, srcUrl);
+				attachmentBlobUrlMap.set(file.name, srcUrl);
+			}
+		} else if (typeof file.content === "string") {
+			if (file.content.startsWith("data:image/")) {
+				srcUrl = file.content;
+			} else if (file.content) {
+				srcUrl = resolveAttachmentUrl(file.name) || resolveAttachmentUrl(file.content) || `data:${file.mimeType || getImageMimeType(file.name)};base64,${file.content}`;
+			}
+		} else if (file.content instanceof ArrayBuffer || (file.content && file.content.buffer instanceof ArrayBuffer)) {
+			blobToUse = new Blob([file.content], { type: file.mimeType || getImageMimeType(file.name) });
+			srcUrl = resolveAttachmentUrl(file.name);
+			if (!srcUrl) {
+				srcUrl = URL.createObjectURL(blobToUse);
+				attachmentBlobUrlMap.set(file.id, srcUrl);
+				attachmentBlobUrlMap.set(`attachments/${file.name}`, srcUrl);
+				attachmentBlobUrlMap.set(`./attachments/${file.name}`, srcUrl);
+				attachmentBlobUrlMap.set(file.name, srcUrl);
+			}
+		}
+
+		imgEl.src = srcUrl;
+
+		const formatBytes = (bytes) => {
+			if (!bytes || bytes <= 0) return "";
+			const k = 1024;
+			const sizes = ["B", "KB", "MB"];
+			const i = Math.floor(Math.log(bytes) / Math.log(k));
+			return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+		};
+
+		const updateMeta = () => {
+			const sizeStr = blobToUse ? formatBytes(blobToUse.size) : (file.size ? formatBytes(file.size) : "");
+			const dims = (imgEl.naturalWidth && imgEl.naturalHeight) ? `${imgEl.naturalWidth} × ${imgEl.naturalHeight}` : "";
+			const metaParts = [file.name];
+			if (dims) metaParts.push(dims);
+			if (sizeStr) metaParts.push(sizeStr);
+			if (infoEl) infoEl.textContent = metaParts.join(" • ");
+			if (cursorPosSpan) cursorPosSpan.textContent = dims || file.name;
+		};
+
+		imgEl.onload = updateMeta;
+		updateMeta();
+
+		if (copyBtn) {
+			copyBtn.onclick = () => {
+				const pathNodes = getPath(file.id);
+				let relPath = `attachments/${file.name}`;
+				if (pathNodes && pathNodes.length > 1) {
+					relPath = pathNodes.map(n => n.name).slice(1).join("/");
+				}
+				const mdLink = `![${file.name}](${relPath})`;
+				navigator.clipboard.writeText(mdLink).then(() => {
+					const orig = copyBtn.innerHTML;
+					copyBtn.innerHTML = `<i data-lucide="check" size="14"></i> <span>Copied!</span>`;
+					if (window.lucide) window.lucide.createIcons();
+					setTimeout(() => {
+						copyBtn.innerHTML = orig;
+						if (window.lucide) window.lucide.createIcons();
+					}, 1500);
+				}).catch(() => {
+					showAlertModal("Copy Link", mdLink);
+				});
+			};
+		}
+
+		if (downloadBtn) {
+			downloadBtn.onclick = () => {
+				if (blobToUse) {
+					downloadBlob(blobToUse, file.name);
+				} else if (srcUrl.startsWith("data:image/")) {
+					const a = document.createElement("a");
+					a.href = srcUrl;
+					a.download = file.name;
+					a.click();
+				}
+			};
+		}
+		if (window.lucide) window.lucide.createIcons();
 	}
 
 	// ============================================================
@@ -1867,14 +2236,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 					});
 				} else {
 					const ext = name.split(".").pop()?.toLowerCase();
-					if (!TEXT_EXTS.has(ext)) continue;
+					const isText = TEXT_EXTS.has(ext);
+					const isImg = isImageFile(name);
+					if (!isText && !isImg) continue;
 					try {
 						const f = await entry.getFile();
-						const content = await f.text();
+						let content;
+						if (isImg) {
+							const buf = await f.arrayBuffer();
+							content = new Blob([buf], { type: f.type || getImageMimeType(name) });
+						} else {
+							content = await f.text();
+						}
 						arr.push({
 							id: matchedExisting?.id || uid("file"),
 							name,
 							type: "file",
+							isBinary: isImg,
+							mimeType: f.type || (isImg ? getImageMimeType(name) : "text/plain"),
 							content,
 							_diskContent: content
 						});
@@ -2111,6 +2490,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 			else files = files.filter(c => c.id !== id);
 
 			openTabs = openTabs.filter(tid => !deletedIds.has(tid));
+			if (typeof attachmentBlobUrlMap !== "undefined") {
+				deletedIds.forEach(did => {
+					const u = attachmentBlobUrlMap.get(did);
+					if (u) {
+						URL.revokeObjectURL(u);
+						attachmentBlobUrlMap.delete(did);
+					}
+				});
+			}
 			if (deletedIds.has(selectedId)) {
 				selectedId = openTabs.length > 0 ? openTabs[openTabs.length - 1] : null;
 				await loadFile();
@@ -2259,8 +2647,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 	};
 	function addToZip(zipObj, nodes) {
 		for (const n of nodes) {
-			if (n.type === "file") zipObj.file(n.name, n.content || "");
-			else addToZip(zipObj.folder(n.name), n.children || []);
+			if (n.type === "file") {
+				if (isImageFile(n.name) || n.isBinary) {
+					zipObj.file(n.name, n.content, { binary: true });
+				} else {
+					zipObj.file(n.name, n.content || "");
+				}
+			} else {
+				addToZip(zipObj.folder(n.name), n.children || []);
+			}
 		}
 	}
 	function downloadBlob(blob, name) {
@@ -2316,14 +2711,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			// Asynchronously read all file contents
 			await Promise.all(fileEntries.map(async ({ path, entry }) => {
-				const content = await entry.async("string");
 				const parts = resolveSafeZipPath(path);
 				const fname = parts.pop();
 				if (!fname) return;
+				const isImg = isImageFile(fname);
+				let content;
+				if (isImg) {
+					content = await entry.async("blob");
+				} else {
+					content = await entry.async("string");
+				}
 				const dirPath = parts.join("/");
 				const arr = folders[dirPath] || files;
 				const safeName = uniqueNodeName(arr, fname);
-				arr.push({ id: uid("file"), name: safeName, type: "file", content });
+				arr.push({
+					id: uid("file"),
+					name: safeName,
+					type: "file",
+					content,
+					isBinary: isImg,
+					mimeType: isImg ? getImageMimeType(fname) : "text/plain"
+				});
 			}));
 
 			persistCurrent();
@@ -2609,7 +3017,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			let show = true, hasChild = false, nameMatches = false;
 			if (searchQuery) {
 				if (node.type === "file") {
-					show = node.name.toLowerCase().includes(searchQuery) || (node.content?.toLowerCase().includes(searchQuery));
+					show = node.name.toLowerCase().includes(searchQuery) || (typeof node.content === "string" && node.content.toLowerCase().includes(searchQuery));
 				} else {
 					nameMatches = node.name.toLowerCase().includes(searchQuery);
 					hasChild = checkMatchingChild(node, searchQuery);
@@ -2709,7 +3117,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			md: "file-text", txt: "file-text", js: "file-code", ts: "file-code", jsx: "file-code",
 			tsx: "file-code", html: "file-code", css: "file-code", json: "braces", yaml: "file-code",
 			yml: "file-code", toml: "file-code", py: "file-code", go: "file-code", sh: "terminal",
-			bash: "terminal", sql: "database"
+			bash: "terminal", sql: "database",
+			png: "image", jpg: "image", jpeg: "image", webp: "image", gif: "image", svg: "image",
+			bmp: "image", ico: "image", avif: "image"
 		};
 		return m[ext] || "file";
 	}
@@ -2718,7 +3128,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (!folder.children) return false;
 		return folder.children.some(c =>
 			c.type === "file"
-				? c.name.toLowerCase().includes(q) || (c.content?.toLowerCase().includes(q))
+				? c.name.toLowerCase().includes(q) || (typeof c.content === "string" && c.content.toLowerCase().includes(q))
 				: (c.name.toLowerCase().includes(q) || checkMatchingChild(c, q))
 		);
 	}
@@ -2798,9 +3208,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (editorMode === mode) return;
 		await autoSaveCurrentFile();
 		editorMode = mode;
+		try { localStorage.setItem("keeplocal_editor_mode", mode); } catch (_) { }
 		updateEditorModeUI();
 		if (activeWsId) saveWsConfig(activeWsId);
 		await loadFile();
+		if (mode === "plain" && editorTextarea && !editorTextarea.disabled) {
+			editorTextarea.focus();
+			updateCursor();
+		}
 	};
 
 	async function initOrUpdateEditorJs(content) {
@@ -2915,36 +3330,112 @@ document.addEventListener("DOMContentLoaded", async () => {
 						title: "Image"
 					};
 				}
+				constructor({ data, config, api, readOnly }) {
+					super({ data, config, api, readOnly });
+					this._originalUrl = data?.url || "";
+					this._servingResolvedUrl = false;
+				}
+				get data() {
+					if (this._servingResolvedUrl) {
+						return {
+							...this._data,
+							url: resolveAttachmentUrl(this._originalUrl || this._data?.url || "")
+						};
+					}
+					return {
+						...this._data,
+						url: this._originalUrl || this._data?.url || ""
+					};
+				}
+				set data(val) {
+					if (!val) return;
+					if (typeof val.url !== "undefined") {
+						if (!val.url.startsWith("blob:") || !this._originalUrl) {
+							this._originalUrl = val.url;
+						}
+					}
+					const targetUrl = this._originalUrl || val.url || "";
+					const resolved = resolveAttachmentUrl(targetUrl);
+					this._data = Object.assign({}, this._data, val, { url: targetUrl });
+					if (this.nodes?.image) {
+						if (resolved) {
+							this.nodes.image.src = resolved;
+						} else {
+							this.nodes.image.removeAttribute("src");
+						}
+					}
+					if (this.nodes?.caption && typeof val.caption !== "undefined") {
+						this.nodes.caption.innerHTML = val.caption;
+					}
+				}
+				_cleanWrapperInputs() {
+					if (!this.nodes?.wrapper) return;
+					const urlInput = this.nodes.wrapper.querySelector(".ce-image-url-input");
+					if (urlInput) urlInput.remove();
+					const errBox = this.nodes.wrapper.querySelector(".ce-image-error-box");
+					if (errBox) errBox.remove();
+				}
 				async onDropHandler(file) {
-					return compressImageFile(file);
+					const relPath = await saveImageToAttachments(file);
+					this._originalUrl = relPath;
+					this._cleanWrapperInputs();
+					return { url: relPath, caption: file.name || "image" };
 				}
 				async onPaste(e) {
+					this._cleanWrapperInputs();
 					switch (e.type) {
 						case "tag": {
 							const src = e.detail?.data?.src || "";
 							if (src.startsWith("data:image/")) {
-								const compressed = await compressDataUrl(src);
-								this.data = { url: compressed };
-							} else {
+								const relPath = await saveImageToAttachments(src);
+								this._originalUrl = relPath;
+								this.data = { url: relPath };
+							} else if (src) {
+								this._originalUrl = src;
 								this.data = { url: src };
 							}
 							break;
 						}
 						case "pattern": {
-							this.data = { url: e.detail?.data || "" };
+							const url = e.detail?.data || "";
+							if (url) {
+								this._originalUrl = url;
+								this.data = { url };
+							}
 							break;
 						}
 						case "file": {
 							const file = e.detail?.file;
 							if (file) {
-								const res = await this.onDropHandler(file);
-								this.data = res;
+								const relPath = await saveImageToAttachments(file);
+								this._originalUrl = relPath;
+								this.data = { url: relPath, caption: file.name || "image" };
 							}
 							break;
 						}
 						default:
 							super.onPaste(e);
 					}
+				}
+				save(blockContent) {
+					const captionEl = blockContent?.querySelector(`.${this.CSS.caption}`) || blockContent?.querySelector('[contenteditable]');
+					let url = this._originalUrl || (this.data?.url ? this.data.url : "");
+					if (url && url.startsWith("blob:") && typeof attachmentBlobUrlMap !== "undefined") {
+						for (const [key, blobUrl] of attachmentBlobUrlMap.entries()) {
+							if (blobUrl === url && key.startsWith("attachments/")) {
+								url = key;
+								break;
+							}
+						}
+					}
+					return {
+						url,
+						caption: captionEl ? captionEl.innerHTML : (this.data?.caption || ""),
+						withBorder: !!this.data?.withBorder,
+						withBackground: !!this.data?.withBackground,
+						stretched: !!this.data?.stretched,
+						tight: !!this.data?.tight
+					};
 				}
 				_acceptTuneView() {
 					this.tunes.forEach(tune => {
@@ -2963,7 +3454,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 					});
 				}
 				render() {
+					const origUrl = this._originalUrl || this.data?.url || "";
+					this._originalUrl = origUrl;
+					const resolvedUrl = resolveAttachmentUrl(origUrl);
+
+					this._servingResolvedUrl = true;
 					const container = super.render();
+					this._servingResolvedUrl = false;
 
 					// Add error and timeout handling so image never spins forever
 					const attachErrorHandler = () => {
@@ -2979,7 +3476,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 								const errorBox = document.createElement("div");
 								errorBox.className = "ce-image-error-box";
 								errorBox.style.cssText = "display:flex; align-items:center; gap:8px; padding:10px 14px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:var(--text-danger, #ef4444); font-size:12px; margin:8px 0;";
-								const displayUrl = (this.data.url || "").length > 60 ? (this.data.url.slice(0, 60) + "…") : (this.data.url || "image");
+								const displayUrl = (this._originalUrl || "").length > 60 ? ((this._originalUrl || "").slice(0, 60) + "…") : (this._originalUrl || "image");
 								errorBox.innerHTML = `
 									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="14" y2="16"/></svg>
 									<span>Unable to load image: <code style="font-size:11px; word-break:break-all;">${escHtml(displayUrl)}</code></span>
@@ -2992,36 +3489,61 @@ document.addEventListener("DOMContentLoaded", async () => {
 						};
 
 						imgEl.addEventListener("error", showError);
+						imgEl.addEventListener("load", () => {
+							container.querySelector(".ce-image-error-box")?.remove();
+							container.querySelector(".ce-image-url-input")?.remove();
+						});
 
-						if (this.data.url) {
-							// Set a fallback timeout of 7 seconds to avoid endless spinner on hanging connections
-							const timeoutId = setTimeout(() => {
-								const loader = container.querySelector(`.${this.CSS.loading}`);
-								if (loader) showError();
-							}, 7000);
-							imgEl.addEventListener("load", () => {
-								clearTimeout(timeoutId);
-								container.querySelector(".ce-image-error-box")?.remove();
-							}, { once: true });
+						if (origUrl) {
+							if (!resolvedUrl) {
+								showError();
+							} else {
+								const timeoutId = setTimeout(() => {
+									const loader = container.querySelector(`.${this.CSS.loading}`);
+									if (loader) showError();
+								}, 7000);
+								imgEl.addEventListener("load", () => clearTimeout(timeoutId), { once: true });
+							}
 						}
 					};
 
 					attachErrorHandler();
 
-					if (!this.data.url) {
+					if (!origUrl) {
 						const urlInput = document.createElement("input");
 						urlInput.className = "cdx-input ce-image-url-input";
-						urlInput.placeholder = "Paste image URL and press Enter…";
+						urlInput.placeholder = "Paste image URL or image file and press Enter…";
 						urlInput.style.cssText = "margin-bottom: 8px;";
 						urlInput.addEventListener("keydown", async (e) => {
 							if (e.key === "Enter") {
 								e.preventDefault();
 								const val = urlInput.value.trim();
 								if (val) {
-									const finalUrl = val.startsWith("data:image/") ? await compressDataUrl(val) : val;
-									this.data = { url: finalUrl, caption: this.data.caption || "" };
+									let finalUrl = val;
+									if (val.startsWith("data:image/")) {
+										finalUrl = await saveImageToAttachments(val);
+									}
+									this._originalUrl = finalUrl;
 									urlInput.remove();
-									attachErrorHandler();
+									this.data = { url: finalUrl, caption: this.data.caption || "" };
+								}
+							}
+						});
+						urlInput.addEventListener("paste", async (e) => {
+							const items = e.clipboardData?.items;
+							if (!items) return;
+							for (let i = 0; i < items.length; i++) {
+								if (items[i].type && items[i].type.startsWith("image/")) {
+									const file = items[i].getAsFile();
+									if (file) {
+										e.preventDefault();
+										e.stopPropagation();
+										const relPath = await saveImageToAttachments(file);
+										this._originalUrl = relPath;
+										this._cleanWrapperInputs();
+										this.data = { url: relPath, caption: file.name || "image" };
+										return;
+									}
 								}
 							}
 						});
@@ -3088,7 +3610,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				editorSaveTimer = setTimeout(async () => {
 					if (!editingId || (selectedId !== editingId && editorLoadedFileId !== editingId)) return;
 					const f = findNode(files, editingId);
-					if (f?.type === "file" && editorInstance) {
+					if (f?.type === "file" && editorInstance && editorMode === "block") {
 						try {
 							const d = await editorInstance.save();
 							if (selectedId !== editingId && editorLoadedFileId !== editingId) return;
@@ -3118,7 +3640,36 @@ document.addEventListener("DOMContentLoaded", async () => {
 		editorLoadedFileId = null;
 		isInitEditor = true;
 
+		const imgViewer = document.getElementById("imageViewerWrapper");
+
 		if (file) {
+			const isImg = isImageFile(file.name);
+			const isMarkdown = !isImg && isMarkdownFile(file.name);
+
+			if (isImg) {
+				hideEditorLoading();
+				if (modeSwitchGroup) modeSwitchGroup.classList.add("hidden");
+				if (textControlsGroup) textControlsGroup.classList.add("hidden");
+				if (modeBlockBtn) modeBlockBtn.disabled = true;
+				if (modePlainBtn) modePlainBtn.disabled = true;
+				if (editorEmptyState) editorEmptyState.classList.add("hidden");
+				editorjsWrapper?.classList.add("hidden");
+				plainWrapper?.classList.add("hidden");
+				if (imgViewer) {
+					imgViewer.classList.remove("hidden");
+					loadImageInViewer(file);
+				}
+				editorLoadedFileId = file.id;
+				if (editorStatusSpan) editorStatusSpan.textContent = "Image Viewer";
+				if (cursorPosSpan) cursorPosSpan.textContent = file.name;
+				isInitEditor = false;
+				updateBreadcrumbs();
+				return;
+			}
+
+			if (imgViewer) imgViewer.classList.add("hidden");
+			if (textControlsGroup) textControlsGroup.classList.remove("hidden");
+
 			const text = file.content || "";
 			editorTextarea.value = text;
 			editorTextarea.disabled = false;
@@ -3126,7 +3677,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			const codeEl = document.getElementById("codeHighlightContent");
 			if (codeEl) codeEl.innerHTML = ""; // prevent stale highlight flash
-			const isMarkdown = isMarkdownFile(file.name);
 
 			if (modeSwitchGroup) {
 				if (isMarkdown) {
@@ -3165,6 +3715,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 				hideEditorLoading();
 				plainWrapper.classList.remove("hidden");
 				editorjsWrapper.classList.add("hidden");
+				if (editorTextarea && !editorTextarea.disabled) {
+					setTimeout(() => {
+						if (!modalOverlay?.classList.contains("active") && !helpModalOverlay?.classList.contains("active") && document.activeElement !== searchInputEl) {
+							editorTextarea.focus();
+							updateCursor();
+						}
+					}, 40);
+				}
 			}
 			editorLoadedFileId = file.id;
 			if (editorStatusSpan) editorStatusSpan.textContent = (editorMode === "block" && isMarkdown) ? "Block Mode" : "Raw Text";
@@ -3176,7 +3734,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 			editorjsWrapper?.classList.add("hidden");
 			plainWrapper?.classList.add("hidden");
+			imgViewer?.classList.add("hidden");
 			if (modeSwitchGroup) modeSwitchGroup.classList.add("hidden");
+			if (textControlsGroup) textControlsGroup.classList.add("hidden");
 			if (modeBlockBtn) modeBlockBtn.disabled = true;
 			if (modePlainBtn) modePlainBtn.disabled = true;
 			editorTextarea.value = "";
@@ -3192,6 +3752,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (editorMode === "plain") {
 			updateCodeHighlighting();
 		}
+	}
+	if (typeof window !== "undefined") {
+		window.loadFile = loadFile;
+		window.__getFiles = () => files;
+		window.__setSelectedId = (id) => { selectedId = id; };
+		window.__getSelectedId = () => selectedId;
+		window.__setEditorMode = (m) => { editorMode = m; };
 	}
 
 	// function updateCodeHighlighting() {
@@ -3458,10 +4025,64 @@ document.addEventListener("DOMContentLoaded", async () => {
 				}
 			}
 		}
+		if (e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End" || e.key === "PageUp" || e.key === "PageDown") {
+			requestAnimationFrame(updateCursor);
+		}
 	});
 	editorTextarea.addEventListener("keyup", updateCursor);
 	editorTextarea.addEventListener("click", updateCursor);
 	editorTextarea.addEventListener("focus", updateCursor);
+
+	document.addEventListener("selectionchange", () => {
+		if (document.activeElement === editorTextarea) {
+			updateCursor();
+		}
+	});
+
+	plainWrapper?.addEventListener("click", (e) => {
+		if (e.target !== editorTextarea && editorTextarea && !editorTextarea.disabled) {
+			editorTextarea.focus();
+			updateCursor();
+		}
+	});
+
+	lineNumbersEl?.addEventListener("click", (e) => {
+		if (!editorTextarea || editorTextarea.disabled) return;
+		editorTextarea.focus();
+		const computed = getComputedStyle(editorTextarea);
+		const lineHeight = parseFloat(computed.lineHeight) || 20;
+		const clickY = e.offsetY + (lineNumbersEl.scrollTop || 0);
+		const targetLineIdx = Math.max(0, Math.floor((clickY - 12) / lineHeight));
+		const lines = editorTextarea.value.split("\n");
+		let pos = 0;
+		for (let i = 0; i < Math.min(targetLineIdx, lines.length); i++) {
+			pos += lines[i].length + 1;
+		}
+		editorTextarea.setSelectionRange(pos, pos);
+		updateCursor();
+	});
+
+	editorTextarea.addEventListener("paste", async (e) => {
+		const items = e.clipboardData?.items;
+		if (!items) return;
+		for (let i = 0; i < items.length; i++) {
+			if (items[i].type && items[i].type.startsWith("image/")) {
+				const file = items[i].getAsFile();
+				if (file) {
+					e.preventDefault();
+					const relPath = await saveImageToAttachments(file);
+					const mdLink = `![image](${relPath})\n`;
+					const start = editorTextarea.selectionStart;
+					const end = editorTextarea.selectionEnd;
+					const val = editorTextarea.value;
+					editorTextarea.value = val.substring(0, start) + mdLink + val.substring(end);
+					editorTextarea.selectionStart = editorTextarea.selectionEnd = start + mdLink.length;
+					editorTextarea.dispatchEvent(new Event("input"));
+					return;
+				}
+			}
+		}
+	});
 
 	// Ctrl/Cmd+Wheel → editor font size only
 	document.querySelector(".main")?.addEventListener("wheel", (e) => {
@@ -3653,7 +4274,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const targetId = (findNode(files, selectedId)?.type === "file") ? selectedId : editorLoadedFileId;
 		if (targetId && editorTextarea) {
 			const f = findNode(files, targetId);
-			if (f?.type === "file") {
+			if (f?.type === "file" && !isImageFile(f.name) && !f.isBinary) {
 				const isMarkdown = isMarkdownFile(f.name);
 				if (editorMode === "plain" || !isMarkdown) {
 					f.content = editorTextarea.value;
