@@ -30,6 +30,9 @@ assert.strictEqual(KeepLocalMarkdown.sanitizeUrl("javascript:alert(1)"), "#");
 assert.strictEqual(KeepLocalMarkdown.sanitizeUrl("vbscript:test"), "#");
 assert.strictEqual(KeepLocalMarkdown.sanitizeUrl("data:text/html,<script>"), "#");
 assert.strictEqual(KeepLocalMarkdown.sanitizeUrl("data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="), "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==");
+assert.strictEqual(KeepLocalMarkdown.sanitizeUrl("attachments/image.webp"), "attachments/image.webp");
+assert.strictEqual(KeepLocalMarkdown.sanitizeUrl("blob:http://localhost:8000/123-456"), "blob:http://localhost:8000/123-456");
+assert.strictEqual(KeepLocalMarkdown.sanitizeUrl("//evil.com/pic.png"), "#");
 console.log("✓ sanitizeUrl tests passed");
 
 // 4. parseStandaloneImage
@@ -170,6 +173,34 @@ assert.deepStrictEqual(KeepLocalMarkdown.resolveSafeZipPath(""), []);
 assert.deepStrictEqual(KeepLocalMarkdown.resolveSafeZipPath(null), []);
 assert.deepStrictEqual(KeepLocalMarkdown.resolveSafeZipPath("../../../"), []);
 assert.deepStrictEqual(KeepLocalMarkdown.resolveSafeZipPath("././."), []);
-console.log("✓ resolveSafeZipPath tests passed");
+// 9. Markdown formatting & tight image roundtrip idempotency
+const tightImages = "![img1](attachments/img1.webp)\n![img2](attachments/img2.webp)";
+let tightCur = tightImages;
+for (let r = 0; r < 5; r++) {
+	tightCur = KeepLocalMarkdown.blocksToText({ blocks: KeepLocalMarkdown.textToBlocks(tightCur) });
+}
+assert.strictEqual(tightCur, tightImages, "Tight images should not insert extra blank lines across roundtrips");
+
+const spacedImages = "![img1](attachments/img1.webp)\n\n![img2](attachments/img2.webp)";
+let spacedCur = spacedImages;
+for (let r = 0; r < 5; r++) {
+	spacedCur = KeepLocalMarkdown.blocksToText({ blocks: KeepLocalMarkdown.textToBlocks(spacedCur) });
+}
+assert.strictEqual(spacedCur, spacedImages, "Spaced images should maintain single empty line across roundtrips");
+
+const textBlocks = "# Heading\n\nParagraph 1\n\nParagraph 2";
+let textCur = textBlocks;
+for (let r = 0; r < 5; r++) {
+	textCur = KeepLocalMarkdown.blocksToText({ blocks: KeepLocalMarkdown.textToBlocks(textCur) });
+}
+assert.strictEqual(textCur, textBlocks, "Text paragraphs should not multiply blank lines across roundtrips");
+
+const doubleBlank = "# Heading\n\n\nParagraph 1";
+let doubleCur = doubleBlank;
+for (let r = 0; r < 5; r++) {
+	doubleCur = KeepLocalMarkdown.blocksToText({ blocks: KeepLocalMarkdown.textToBlocks(doubleCur) });
+}
+assert.strictEqual(doubleCur, doubleBlank, "Intentional double blank lines should be preserved across roundtrips");
+console.log("✓ tight image and roundtrip idempotency tests passed");
 
 console.log("All KeepLocalMarkdown unit tests passed successfully!");

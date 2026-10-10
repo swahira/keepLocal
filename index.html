@@ -284,16 +284,18 @@
                             <i data-lucide="code" size="14"></i> Raw
                         </button>
                     </div>
-                    <button class="control-btn" onclick="changeFontSize(-1)" title="Decrease Font Size">
-                        <i data-lucide="minus" size="15"></i>
-                    </button>
-                    <button class="control-btn" onclick="changeFontSize(1)" title="Increase Font Size">
-                        <i data-lucide="plus" size="15"></i>
-                    </button>
-                    <button id="wrapToggle" class="control-btn" onclick="toggleWordWrap()"
-                        title="Toggle Word Wrap (Alt+Z)">
-                        <i data-lucide="wrap-text" size="15"></i>
-                    </button>
+                    <div id="textControlsGroup" class="text-controls-group hidden">
+                        <button class="control-btn" onclick="changeFontSize(-1)" title="Decrease Font Size">
+                            <i data-lucide="minus" size="15"></i>
+                        </button>
+                        <button class="control-btn" onclick="changeFontSize(1)" title="Increase Font Size">
+                            <i data-lucide="plus" size="15"></i>
+                        </button>
+                        <button id="wrapToggle" class="control-btn" onclick="toggleWordWrap()"
+                            title="Toggle Word Wrap (Alt+Z)">
+                            <i data-lucide="wrap-text" size="15"></i>
+                        </button>
+                    </div>
                     <button id="themeToggle" class="control-btn" onclick="toggleTheme()" title="Toggle Theme">
                         <i data-lucide="sun" size="15"></i>
                     </button>
@@ -321,6 +323,22 @@
                     <div class="code-editor-area">
                         <pre id="codeHighlightPre" aria-hidden="true"><code id="codeHighlightContent"></code></pre>
                         <textarea id="editor" spellcheck="false" placeholder="Start typing..."></textarea>
+                    </div>
+                </div>
+                <div id="imageViewerWrapper" class="image-viewer-wrapper hidden">
+                    <div class="image-viewer-toolbar">
+                        <span id="imageViewerInfo" class="image-viewer-info"></span>
+                        <div class="image-viewer-actions">
+                            <button id="imageViewerCopyBtn" class="control-btn" title="Copy Markdown Link">
+                                <i data-lucide="copy" size="14"></i> <span>Copy Markdown</span>
+                            </button>
+                            <button id="imageViewerDownloadBtn" class="control-btn" title="Download Image">
+                                <i data-lucide="download" size="14"></i> <span>Download</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="image-viewer-body">
+                        <img id="imageViewerImg" class="image-viewer-img" alt="Preview" />
                     </div>
                 </div>
             </div>

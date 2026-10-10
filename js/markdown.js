@@ -26,16 +26,25 @@
 	function sanitizeUrl(url) {
 		if (!url) return "#";
 		const trimmed = url.trim();
+		// Disallow protocol-relative URLs (e.g. //evil.com)
+		if (trimmed.startsWith("//")) {
+			return "#";
+		}
 		// Allow safe web schemes and relative anchors/paths
 		if (/^(?:(?:https?|mailto|tel):|\/|\.\/|\.\.\/|#)/i.test(trimmed)) {
 			return trimmed;
 		}
 		// Allow blob URLs
-		if (/^blob:https?:\/\//i.test(trimmed)) {
+		if (/^blob:(?:https?:\/\/|null\/)/i.test(trimmed) || trimmed.startsWith("blob:")) {
 			return trimmed;
 		}
 		// Allow image data URIs (prefix check to avoid catastrophic regex backtracking on large payloads)
 		if (/^data:image\/(?:png|jpeg|jpg|gif|svg\+xml|webp|ico|avif);base64,/i.test(trimmed)) {
+			return trimmed;
+		}
+		// Allow relative paths without scheme (e.g. attachments/image.webp, assets/photo.png)
+		// Must not have a URI scheme (like javascript:, vbscript:, data:) and must not start with "//"
+		if (!/^[a-z][a-z0-9+.-]*:/i.test(trimmed) && !trimmed.startsWith("//")) {
 			return trimmed;
 		}
 		return "#";
@@ -127,7 +136,10 @@
 				if (safeUrl === "#") {
 					result += rawLabel;
 				} else {
-					result += `<img src="${safeUrl}" alt="${rawLabel}" style="max-width:100%; border-radius:6px; margin:4px 0;" />`;
+					const displayUrl = (typeof window !== "undefined" && typeof window.resolveAttachmentUrl === "function")
+						? (window.resolveAttachmentUrl(safeUrl) || safeUrl)
+						: safeUrl;
+					result += `<img src="${displayUrl}" alt="${rawLabel}" style="max-width:100%; border-radius:6px; margin:4px 0;" />`;
 				}
 			} else {
 				const labelHtml = isImage ? rawLabel : replaceMarkdownLinksAndImages(rawLabel, sanitizeUrlFn);
@@ -286,10 +298,18 @@
 
 	function h2md(s) {
 		if (!s) return "";
+		const cleanImgSrc = (src) => {
+			if (src && src.startsWith("blob:") && typeof window !== "undefined" && window.attachmentBlobUrlMap) {
+				for (const [key, val] of window.attachmentBlobUrlMap.entries()) {
+					if (val === src && key.startsWith("attachments/")) return key;
+				}
+			}
+			return src;
+		};
 		return s
-			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*>/gi, "![$2]($1)")
-			.replace(/<img\s+[^>]*alt="([^"]*)"[^>]*src="([^"]*)"[^>]*>/gi, "![$1]($2)")
-			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*>/gi, "![]($1)")
+			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*>/gi, (_, src, alt) => `![${alt}](${cleanImgSrc(src)})`)
+			.replace(/<img\s+[^>]*alt="([^"]*)"[^>]*src="([^"]*)"[^>]*>/gi, (_, alt, src) => `![${alt}](${cleanImgSrc(src)})`)
+			.replace(/<img\s+[^>]*src="([^"]*)"[^>]*>/gi, (_, src) => `![](${cleanImgSrc(src)})`)
 			.replace(/<a [^>]*href="(.*?)"[^>]*>(.*?)<\/a>/gi, (match, url, text) => {
 				if (url === "#") return text;
 				return `[${text}](${url})`;
@@ -310,12 +330,100 @@
 			.replace(/%%%U_OPEN%%%/g, "<u>").replace(/%%%U_CLOSE%%%/g, "</u>");
 	}
 
+	function serializeBlockLines(b) {
+		const lines = [];
+		switch (b.type) {
+			case "header":
+				lines.push("#".repeat(b.data?.level || 1) + " " + h2md(b.data?.text || ""));
+				break;
+			case "paragraph":
+				lines.push(h2md(b.data?.text || ""));
+				break;
+			case "delimiter":
+				lines.push("---");
+				break;
+			case "image": {
+				const cap = h2md(b.data?.caption || "").trim();
+				lines.push(`![${cap}](${b.data?.url || ""})`);
+				break;
+			}
+			case "warning": {
+				const alertType = (b.data?.alertType || "NOTE").toUpperCase();
+				const defaultTitle = alertType.charAt(0) + alertType.slice(1).toLowerCase();
+				const title = h2md(b.data?.title || "").trim();
+				const msg = h2md(b.data?.message || "").trim();
+				if (title && title.toLowerCase() !== defaultTitle.toLowerCase() && title.toLowerCase() !== "note") {
+					lines.push(`> [!${alertType}] ${title}`);
+				} else {
+					lines.push(`> [!${alertType}]`);
+				}
+				if (msg) {
+					msg.split("\n").forEach(l => lines.push(`> ${l}`));
+				}
+				break;
+			}
+			case "quote": {
+				const qt = h2md(b.data?.text || "");
+				qt.split("\n").forEach(l => lines.push(`> ${l}`));
+				if (b.data?.caption) lines.push(`> — ${h2md(b.data.caption)}`);
+				break;
+			}
+			case "list": {
+				const renderItems = (items, level = 0, style = "unordered") => {
+					if (!items || !Array.isArray(items)) return;
+					const indent = "  ".repeat(level);
+					items.forEach((item, index) => {
+						const text = typeof item === "string" ? item : (item.content || "");
+						const marker = style === "ordered" ? `${index + 1}.` : "-";
+						lines.push(`${indent}${marker} ${h2md(text)}`);
+						if (item.items && Array.isArray(item.items) && item.items.length > 0) {
+							renderItems(item.items, level + 1, style);
+						}
+					});
+				};
+				renderItems(b.data?.items, 0, b.data?.style || "unordered");
+				break;
+			}
+			case "checklist": {
+				(b.data?.items || []).forEach(it => {
+					lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`);
+				});
+				break;
+			}
+			case "code": {
+				const lang = b.data?.language || "";
+				lines.push(`\`\`\`${lang}`);
+				lines.push(b.data?.code || "");
+				lines.push("```");
+				break;
+			}
+			case "table": {
+				const content = b.data?.content || [];
+				if (content.length) {
+					content.forEach((row, idx) => {
+						lines.push("| " + row.map(c => h2md(c)).join(" | ") + " |");
+						if (idx === 0 && b.data?.withHeadings !== false) {
+							lines.push("| " + row.map(() => "---").join(" | ") + " |");
+						}
+					});
+				}
+				break;
+			}
+			default:
+				if (b.data?.text) lines.push(h2md(b.data.text));
+		}
+		return lines;
+	}
+
 	function textToBlocks(text) {
 		if (!text?.trim()) return [{ type: "paragraph", data: { text: "" } }];
 		const lines = text.split("\n");
 		const blocks = [];
 		let inCode = false, codeBuf = [], tableBuf = [], currentCodeLang = "";
 		let listStack = [];
+		let blankCount = 0;
+		let codeTight = false;
+		let tableTight = false;
 
 		const flushCode = () => {
 			if (codeBuf.length || inCode) {
@@ -323,13 +431,16 @@
 					type: "code",
 					data: {
 						code: codeBuf.join("\n"),
-						language: currentCodeLang || ""
+						language: currentCodeLang || "",
+						tight: codeTight
 					}
 				});
 				codeBuf = [];
 				currentCodeLang = "";
+				codeTight = false;
 			}
 		};
+
 		const flushTable = () => {
 			if (!tableBuf.length) return;
 			const hasHeaderSep = tableBuf.length > 1 && tableBuf[1].split("|").slice(1, -1).every(c => /^:?-+:?$/.test(c.trim()));
@@ -337,9 +448,10 @@
 				.map(r => r.split("|").slice(1, -1).map(c => c.trim()))
 				.filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c)));
 			if (content.length) {
-				blocks.push({ type: "table", data: { content, withHeadings: hasHeaderSep } });
+				blocks.push({ type: "table", data: { content, withHeadings: hasHeaderSep, tight: tableTight } });
 			}
 			tableBuf = [];
+			tableTight = false;
 		};
 
 		for (const line of lines) {
@@ -350,28 +462,55 @@
 					flushCode();
 				} else {
 					flushTable();
+					if (blocks.length > 0 && blankCount > 1) {
+						for (let k = 0; k < blankCount - 1; k++) {
+							blocks.push({ type: "paragraph", data: { text: "", tight: true } });
+						}
+					}
+					codeTight = (blankCount === 0 && blocks.length > 0);
+					blankCount = 0;
 					inCode = true;
 					currentCodeLang = line.trim().slice(3).trim();
 				}
 				continue;
 			}
 			if (inCode) { codeBuf.push(line); continue; }
+
 			if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
 				listStack = [];
+				if (tableBuf.length === 0) {
+					if (blocks.length > 0 && blankCount > 1) {
+						for (let k = 0; k < blankCount - 1; k++) {
+							blocks.push({ type: "paragraph", data: { text: "", tight: true } });
+						}
+					}
+					tableTight = (blankCount === 0 && blocks.length > 0);
+					blankCount = 0;
+				}
 				tableBuf.push(line.trim());
 				continue;
 			}
 			flushTable();
+
 			const t = line.trim();
 			if (!t) {
 				listStack = [];
-				blocks.push({ type: "paragraph", data: { text: "" } });
+				blankCount++;
 				continue;
 			}
 
+			if (blocks.length > 0 && blankCount > 1) {
+				for (let k = 0; k < blankCount - 1; k++) {
+					blocks.push({ type: "paragraph", data: { text: "", tight: true } });
+				}
+			}
+
+			const isTight = (blankCount === 0 && blocks.length > 0);
+			blankCount = 0;
+
 			if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(t)) {
 				listStack = [];
-				blocks.push({ type: "delimiter", data: {} });
+				blocks.push({ type: "delimiter", data: { tight: isTight } });
 				continue;
 			}
 
@@ -382,18 +521,19 @@
 					type: "image",
 					data: {
 						url: standaloneImg.url,
-						caption: md2h(standaloneImg.alt)
+						caption: md2h(standaloneImg.alt),
+						tight: isTight
 					}
 				});
 				continue;
 			}
 
-			if (t.startsWith("###### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(7)), level: 6 } }); }
-			else if (t.startsWith("##### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(6)), level: 5 } }); }
-			else if (t.startsWith("#### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4 } }); }
-			else if (t.startsWith("### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3 } }); }
-			else if (t.startsWith("## ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2 } }); }
-			else if (t.startsWith("# ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(2)), level: 1 } }); }
+			if (t.startsWith("###### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(7)), level: 6, tight: isTight } }); }
+			else if (t.startsWith("##### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(6)), level: 5, tight: isTight } }); }
+			else if (t.startsWith("#### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(5)), level: 4, tight: isTight } }); }
+			else if (t.startsWith("### ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(4)), level: 3, tight: isTight } }); }
+			else if (t.startsWith("## ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(3)), level: 2, tight: isTight } }); }
+			else if (t.startsWith("# ")) { listStack = []; blocks.push({ type: "header", data: { text: md2h(t.slice(2)), level: 1, tight: isTight } }); }
 			else if (/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(t)) {
 				listStack = [];
 				const alertMatch = t.match(/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i);
@@ -404,7 +544,8 @@
 					data: {
 						title: alertTitle,
 						message: "",
-						alertType: alertType
+						alertType: alertType,
+						tight: isTight
 					}
 				});
 			}
@@ -417,7 +558,7 @@
 				} else if (last?.type === "quote") {
 					last.data.text = last.data.text ? (last.data.text + "<br>" + quoteText) : quoteText;
 				} else {
-					blocks.push({ type: "quote", data: { text: quoteText, caption: "" } });
+					blocks.push({ type: "quote", data: { text: quoteText, caption: "", tight: isTight } });
 				}
 			}
 			else if (t.startsWith("- [ ] ") || t.startsWith("- [x] ") || t.startsWith("- [X] ")) {
@@ -428,7 +569,7 @@
 				if (last?.type === "checklist") {
 					last.data.items.push({ text: itemText, checked });
 				} else {
-					blocks.push({ type: "checklist", data: { items: [{ text: itemText, checked }] } });
+					blocks.push({ type: "checklist", data: { items: [{ text: itemText, checked }], tight: isTight } });
 				}
 			}
 			else if (/^(\s*)([-*+]|\d+\.)\s+(.+)$/.test(line)) {
@@ -457,7 +598,8 @@
 						type: "list",
 						data: {
 							style: style,
-							items: [newItem]
+							items: [newItem],
+							tight: isTight
 						}
 					};
 					blocks.push(rootList);
@@ -479,7 +621,7 @@
 				}
 			} else {
 				listStack = [];
-				blocks.push({ type: "paragraph", data: { text: md2h(line) } });
+				blocks.push({ type: "paragraph", data: { text: md2h(line), tight: isTight } });
 			}
 		}
 		flushCode(); flushTable();
@@ -487,87 +629,24 @@
 	}
 
 	function blocksToText(data) {
-		if (!data?.blocks) return "";
-		const lines = [];
-		for (const b of data.blocks) {
-			switch (b.type) {
-				case "header": lines.push("#".repeat(b.data.level || 1) + " " + h2md(b.data.text)); break;
-				case "paragraph": lines.push(h2md(b.data.text)); break;
-				case "delimiter": lines.push("---"); break;
-				case "image": {
-					const cap = h2md(b.data.caption || "").trim();
-					lines.push(`![${cap}](${b.data.url || ""})`);
-					break;
+		if (!data?.blocks || !data.blocks.length) return "";
+		const result = [];
+		for (let i = 0; i < data.blocks.length; i++) {
+			const b = data.blocks[i];
+			const bl = serializeBlockLines(b);
+			const blockText = bl.join("\n");
+
+			if (i === 0) {
+				result.push(blockText);
+			} else {
+				if (b.data?.tight) {
+					result.push("\n" + blockText);
+				} else {
+					result.push("\n\n" + blockText);
 				}
-				case "warning": {
-					const alertType = (b.data?.alertType || "NOTE").toUpperCase();
-					const defaultTitle = alertType.charAt(0) + alertType.slice(1).toLowerCase();
-					const title = h2md(b.data?.title || "").trim();
-					const msg = h2md(b.data?.message || "").trim();
-					if (title && title.toLowerCase() !== defaultTitle.toLowerCase() && title.toLowerCase() !== "note") {
-						lines.push(`> [!${alertType}] ${title}`);
-					} else {
-						lines.push(`> [!${alertType}]`);
-					}
-					if (msg) {
-						msg.split("\n").forEach(l => lines.push(`> ${l}`));
-					}
-					break;
-				}
-				case "quote": {
-					const qt = h2md(b.data.text || "");
-					qt.split("\n").forEach(l => lines.push(`> ${l}`));
-					if (b.data.caption) lines.push(`> — ${h2md(b.data.caption)}`);
-					break;
-				}
-				case "list": {
-					const renderItems = (items, level = 0, style = "unordered") => {
-						if (!items || !Array.isArray(items)) return;
-						const indent = "  ".repeat(level);
-						items.forEach((item, index) => {
-							const text = typeof item === "string" ? item : (item.content || "");
-							const marker = style === "ordered" ? `${index + 1}.` : "-";
-							lines.push(`${indent}${marker} ${h2md(text)}`);
-							if (item.items && Array.isArray(item.items) && item.items.length > 0) {
-								renderItems(item.items, level + 1, style);
-							}
-						});
-					};
-					renderItems(b.data.items, 0, b.data.style || "unordered");
-					break;
-				}
-				case "checklist": {
-					(b.data.items || []).forEach(it => {
-						lines.push(`- [${it.checked ? "x" : " "}] ${h2md(it.text)}`);
-					});
-					break;
-				}
-				case "code": {
-					const lang = b.data.language || "";
-					lines.push(`\`\`\`${lang}`);
-					lines.push(b.data.code || "");
-					lines.push("```");
-					break;
-				}
-				case "table": {
-					const content = b.data.content || [];
-					if (content.length) {
-						content.forEach((row, idx) => {
-							lines.push("| " + row.map(c => h2md(c)).join(" | ") + " |");
-							if (idx === 0 && b.data.withHeadings !== false) {
-								lines.push("| " + row.map(() => "---").join(" | ") + " |");
-							}
-						});
-					}
-					break;
-				}
-				default:
-					if (b.data?.text) lines.push(h2md(b.data.text));
 			}
-			lines.push("");
 		}
-		while (lines.length && lines[lines.length - 1] === "") lines.pop();
-		return lines.join("\n");
+		return result.join("").replace(/\n+$/, "");
 	}
 
 	function resolveSafeZipPath(rawPath) {
