@@ -336,9 +336,15 @@
 			case "header":
 				lines.push("#".repeat(b.data?.level || 1) + " " + h2md(b.data?.text || ""));
 				break;
-			case "paragraph":
-				lines.push(h2md(b.data?.text || ""));
+			case "paragraph": {
+				const rawText = b.data?.text || "";
+				if (!rawText || rawText === "<br>" || rawText === "<br/>" || rawText.trim() === "") {
+					lines.push("");
+				} else {
+					lines.push(h2md(rawText));
+				}
 				break;
+			}
 			case "delimiter":
 				lines.push("---");
 				break;
@@ -635,11 +641,12 @@
 			const b = data.blocks[i];
 			const bl = serializeBlockLines(b);
 			const blockText = bl.join("\n");
+			const isEmptyParagraph = (b.type === "paragraph" && (!b.data?.text || b.data.text === "<br>" || b.data.text === "<br/>" || b.data.text.trim() === ""));
 
 			if (i === 0) {
 				result.push(blockText);
 			} else {
-				if (b.data?.tight) {
+				if (b.data?.tight || isEmptyParagraph) {
 					result.push("\n" + blockText);
 				} else {
 					result.push("\n\n" + blockText);
@@ -685,6 +692,7 @@
 		h2md,
 		textToBlocks,
 		blocksToText,
+		serializeBlockLines,
 		resolveSafeZipPath
 	};
 

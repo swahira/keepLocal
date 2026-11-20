@@ -201,6 +201,44 @@ for (let r = 0; r < 5; r++) {
 	doubleCur = KeepLocalMarkdown.blocksToText({ blocks: KeepLocalMarkdown.textToBlocks(doubleCur) });
 }
 assert.strictEqual(doubleCur, doubleBlank, "Intentional double blank lines should be preserved across roundtrips");
+
+// Test Editor.js simulation: Editor.js paragraph tool discards `tight` on save
+const userCase = "Text 1\n\n\nText 2";
+let userCur = userCase;
+for (let r = 0; r < 5; r++) {
+	const rawBlocks = KeepLocalMarkdown.textToBlocks(userCur);
+	const editorSavedBlocks = rawBlocks.map(b => {
+		if (b.type === "paragraph") {
+			return { type: "paragraph", data: { text: b.data?.text || "" } };
+		}
+		return b;
+	});
+	userCur = KeepLocalMarkdown.blocksToText({ blocks: editorSavedBlocks });
+}
+assert.strictEqual(userCur, userCase, "Two blank lines between texts should not double across Editor.js roundtrips");
+
+// Test multiple blank lines with Editor.js stripped tight metadata
+const tripleBlank = "Text 1\n\n\n\nText 2";
+let tripleCur = tripleBlank;
+for (let r = 0; r < 5; r++) {
+	const rawBlocks = KeepLocalMarkdown.textToBlocks(tripleCur);
+	const editorSavedBlocks = rawBlocks.map(b => {
+		if (b.type === "paragraph") {
+			return { type: "paragraph", data: { text: b.data?.text || "" } };
+		}
+		return b;
+	});
+	tripleCur = KeepLocalMarkdown.blocksToText({ blocks: editorSavedBlocks });
+}
+assert.strictEqual(tripleCur, tripleBlank, "Three blank lines between texts should not double across Editor.js roundtrips");
+
+// Test Editor.js empty paragraph saved with <br>
+const brBlocks = [
+	{ type: "paragraph", data: { text: "Text 1" } },
+	{ type: "paragraph", data: { text: "<br>" } },
+	{ type: "paragraph", data: { text: "Text 2" } }
+];
+assert.strictEqual(KeepLocalMarkdown.blocksToText({ blocks: brBlocks }), "Text 1\n\n\nText 2");
 console.log("✓ tight image and roundtrip idempotency tests passed");
 
 console.log("All KeepLocalMarkdown unit tests passed successfully!");
