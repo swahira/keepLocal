@@ -438,7 +438,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		welcomeScreen.classList.remove("hidden");
 		appShell.classList.add("hidden");
 		document.title = "KeepLocal – Workspaces";
-		if (window.location.hash !== "#/workspaces" && !window.location.search.includes("view=workspaces")) {
+		if (window.location.hash !== "#/workspaces" && !window.location.search.includes("view=workspaces") && !window.location.hash.startsWith("#/collab/")) {
 			try { history.replaceState(null, "", "#/workspaces"); } catch (_) { }
 		}
 		renderWorkspaceCards();
@@ -4078,6 +4078,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 							if (editorTextarea) editorTextarea.value = f.content;
 							persistCurrent();
 							syncWorkspace(false);
+							if (window.KeepLocalCollabManager && window.KeepLocalCollabManager.isActive()) {
+								window.KeepLocalCollabManager.handleLocalInput(f.content);
+							}
 						} catch (_) { }
 					}
 				}, 400);
@@ -4348,6 +4351,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			f.content = editorTextarea.value;
 			persistCurrent();
 			syncWorkspace(false);
+			if (window.KeepLocalCollabManager && window.KeepLocalCollabManager.isActive()) {
+				window.KeepLocalCollabManager.handleLocalInput(editorTextarea.value);
+			}
 		}
 		updateLineNumbers();
 		updateCodeHighlighting();
@@ -4719,6 +4725,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (isSafe || viewParam === "workspaces" || hash === "workspaces" || path.endsWith("/workspaces")) {
 			return { view: "workspaces" };
 		}
+		if (hash.startsWith("collab/")) {
+			return { view: "collab" };
+		}
 		if (hash.startsWith("workspace/")) {
 			const wsId = window.location.hash.replace(/^#\/?workspace\//i, "").trim();
 			return { view: "editor", wsId };
@@ -4728,7 +4737,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	const initialRoute = getInitialRoute();
 
-	if (initialRoute?.view === "workspaces") {
+	if (initialRoute?.view === "collab") {
+		// Live collaboration direct link: ensure active workspace is ready for collaborative editing
+		if (workspaces && workspaces.length > 0) {
+			const lastActiveWsId = localStorage.getItem("keeplocal_active_ws_id");
+			const targetWs = workspaces.find(w => w.id === lastActiveWsId) || workspaces[0];
+			await openWorkspace(targetWs.id);
+		} else {
+			const ws = {
+				id: uid("ws"),
+				name: "My Notes",
+				createdAt: Date.now(),
+				lastOpenedAt: Date.now(),
+				folderName: null,
+				fileCount: 0
+			};
+			workspaces.push(ws);
+			saveWorkspaceMeta();
+			await openWorkspace(ws.id);
+		}
+	} else if (initialRoute?.view === "workspaces") {
 		try { localStorage.removeItem("keeplocal_active_ws_id"); } catch (_) { }
 		showWelcome();
 	} else if (initialRoute?.view === "editor" && initialRoute.wsId) {
@@ -4760,8 +4788,117 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (wsId && wsId !== activeWsId) {
 				openWorkspace(wsId);
 			}
+		} else if (currentHash.startsWith("collab/")) {
+			if (window.KeepLocalCollabManager) {
+				window.KeepLocalCollabManager.checkUrlForSession();
+			}
 		}
 	});
+
+	// ============================================================
+	// KEEPLOCAL PUBLIC API (Collaboration & Extensibility Hook)
+	// ============================================================
+	window.KeepLocalAPI = {
+		getActiveFile: () => (selectedId ? findNode(files, selectedId) : null),
+		getActiveFileId: () => selectedId,
+		getFiles: () => files,
+		getEditorMode: () => editorMode,
+		getEditorInstance: () => editorInstance,
+		getEditorTextarea: () => editorTextarea,
+		findNode: (id) => findNode(files, id),
+		persistCurrent: () => persistCurrent(),
+		syncWorkspace: (immediate = false) => syncWorkspace(immediate),
+		loadFile: () => loadFile(),
+		updateLineNumbers: () => updateLineNumbers(),
+		updateCodeHighlighting: () => updateCodeHighlighting(),
+		ensureActiveWorkspace: async () => {
+			if (activeWsId && !welcomeScreen.classList.contains("hidden")) {
+				welcomeScreen.classList.add("hidden");
+				appShell.classList.remove("hidden");
+				return activeWsId;
+			}
+			if (activeWsId) {
+				welcomeScreen.classList.add("hidden");
+				appShell.classList.remove("hidden");
+				return activeWsId;
+			}
+			if (workspaces && workspaces.length > 0) {
+				await openWorkspace(workspaces[0].id);
+				welcomeScreen.classList.add("hidden");
+				appShell.classList.remove("hidden");
+				return activeWsId;
+			}
+			const ws = {
+				id: uid("ws"),
+				name: "My Notes",
+				createdAt: Date.now(),
+				lastOpenedAt: Date.now(),
+				folderName: null,
+				fileCount: 0
+			};
+			workspaces.push(ws);
+			saveWorkspaceMeta();
+			await openWorkspace(ws.id);
+			welcomeScreen.classList.add("hidden");
+			appShell.classList.remove("hidden");
+			return activeWsId;
+		},
+		openFileById: async (id) => {
+			if (!activeWsId || !welcomeScreen.classList.contains("hidden")) {
+				if (workspaces && workspaces.length > 0) {
+					await openWorkspace(workspaces[0].id);
+				}
+			}
+			welcomeScreen.classList.add("hidden");
+			appShell.classList.remove("hidden");
+			selectedId = id;
+			if (!openTabs.includes(id)) {
+				openTabs.push(id);
+			}
+			persistCurrent();
+			render();
+			await loadFile();
+			syncWorkspace();
+		},
+		addFileWithContent: async (name, content = "") => {
+			if (!activeWsId || !welcomeScreen.classList.contains("hidden")) {
+				if (workspaces && workspaces.length > 0) {
+					await openWorkspace(workspaces[0].id);
+				} else {
+					const ws = {
+						id: uid("ws"),
+						name: "My Notes",
+						createdAt: Date.now(),
+						lastOpenedAt: Date.now(),
+						folderName: null,
+						fileCount: 0
+					};
+					workspaces.push(ws);
+					saveWorkspaceMeta();
+					await openWorkspace(ws.id);
+				}
+			}
+			welcomeScreen.classList.add("hidden");
+			appShell.classList.remove("hidden");
+
+			let finalName = name || "untitled.md";
+			let c = 1;
+			while (nameExistsInArray(files, finalName)) {
+				finalName = finalName.replace(/\.md$/i, "") + `-${c++}.md`;
+			}
+			const nf = { id: uid("file"), name: finalName, type: "file", content: content || "" };
+			files.push(nf);
+			if (!openTabs.includes(nf.id)) {
+				openTabs.push(nf.id);
+			}
+			selectedId = nf.id;
+			persistCurrent();
+			render();
+			await loadFile();
+			syncWorkspace();
+			return nf;
+		}
+	};
 
 	// First time visit: show product onboarding & help modal
 	const hasSeenHelp = localStorage.getItem("keeplocal_help_seen");

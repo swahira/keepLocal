@@ -12,6 +12,7 @@ KeepLocal is a powerful, privacy-first note-taking application designed for spee
 ## Features
 
 - **Multi-Workspace Management**: Create and switch between independent workspaces, view workspace cards, and manage folders on a dedicated welcome screen.
+- **Live Serverless P2P Collaboration**: Real-time collaborative note editing powered by WebRTC (via Trystero BitTorrent/Nostr signaling) and Yjs CRDTs. 100% decentralized, end-to-end encrypted, zero backend, and zero accounts.
 - **Bi-directional Local Folder Sync**: Connect any folder on your machine via the Chromium File System Access API with automated real-time background sync.
 - **Dual Editor Modes**:
   - **Block Editor (Editor.js)**: Rich slash-command (`/`) block editing with H1–H6 headings, checklists, nested lists, callouts/alerts, blockquotes, code blocks, horizontal delimiters, images, inline markers, and tables.
@@ -79,6 +80,8 @@ Since KeepLocal is a client-side application, you can run it locally with any st
 - **Modern CSS3** (Custom properties, Flexbox, CSS Grid, media breakpoints)
 - **Vanilla JavaScript** (ES6+, async/await)
 - **[Editor.js](https://editorjs.io/)** block editor ecosystem
+- **[Trystero](https://trystero.dev/)** decentralized serverless WebRTC signaling
+- **[Yjs](https://yjs.dev/)** high-performance CRDT framework for real-time collaboration
 - **[Prism.js](https://prismjs.com/)** syntax highlighting
 - **[Lucide Icons](https://lucide.dev/)**
 - **[JSZip](https://stuk.github.io/jszip/)** client-side archive engine

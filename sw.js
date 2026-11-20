@@ -3,7 +3,7 @@
    Offline caching for local-first note taking (ARCH-01)
    ============================================================ */
 
-const CACHE_NAME = 'keeplocal-v15';
+const CACHE_NAME = 'keeplocal-v19';
 
 const STATIC_ASSETS = [
 	'./',
@@ -11,6 +11,8 @@ const STATIC_ASSETS = [
 	'css/styles.css',
 	'js/db.js',
 	'js/markdown.js',
+	'js/collab-bundle.js',
+	'js/collab.js',
 	'js/script.js',
 	'assets/keeplocal.png',
 	'https://unpkg.com/lucide@1.48.0/dist/umd/lucide.min.js',

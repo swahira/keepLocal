@@ -80,6 +80,14 @@
                 </button>
                 <input type="file" id="welcomeImportInput" accept=".zip" style="display:none"
                     onchange="handleWelcomeImport(event)">
+
+                <button class="welcome-action-btn" onclick="window.KeepLocalCollabManager && window.KeepLocalCollabManager.openModal({ tab: 'join' })">
+                    <i data-lucide="users" size="18"></i>
+                    <div class="action-btn-text">
+                        <span>Live Collaboration</span>
+                        <small>Join or start P2P real-time note editing</small>
+                    </div>
+                </button>
             </div>
 
             <div class="welcome-tips">
@@ -275,6 +283,14 @@
                 </button>
                 <div id="breadcrumb"></div>
                 <div class="controls">
+                    <div id="collabActiveBadge" class="collab-badge hidden" onclick="window.KeepLocalCollabManager && window.KeepLocalCollabManager.openModal()" title="Live Collaboration Active">
+                        <span class="collab-badge-pulse"></span>
+                        <span id="collabPeerCount">1 online</span>
+                        <div id="collabPeerAvatars" class="collab-peer-avatars"></div>
+                    </div>
+                    <button id="collabBtn" class="control-btn" onclick="window.KeepLocalCollabManager && window.KeepLocalCollabManager.openModal()" title="Live Collaboration (P2P)">
+                        <i data-lucide="users" size="15"></i>
+                    </button>
                     <div id="modeSwitchGroup" class="mode-switch-group hidden">
                         <button id="modeBlockBtn" class="mode-btn active" onclick="switchEditorMode('block')"
                             title="Block Editor">
@@ -346,6 +362,7 @@
             <div class="statusbar">
                 <span id="editorStatus" class="status-left">Block Mode</span>
                 <span id="wsStatusBadge" class="ws-status-badge">No folder</span>
+                <span id="collabStatusBadge" class="ws-status-badge collab-status-badge hidden">P2P Off</span>
                 <span id="cursorPos" class="status-right">Ln 1, Col 1</span>
                 <button id="statusHelpBtn" class="status-help-btn" onclick="toggleHelpModal()" title="Help & Shortcuts (? / Alt+H)">
                     <i data-lucide="help-circle" size="11"></i> Help (?)
@@ -495,6 +512,126 @@
         </div>
     </div>
 
+    <!-- Collaboration Modal -->
+    <div id="collabModalOverlay" class="modal-overlay">
+        <div class="modal-container collab-modal-container" role="dialog" aria-modal="true" aria-labelledby="collabModalTitle">
+            <div class="help-modal-header">
+                <div class="help-brand-wrap">
+                    <div class="collab-logo-icon">
+                        <i data-lucide="users" size="20"></i>
+                    </div>
+                    <div>
+                        <h2 id="collabModalTitle" class="help-modal-title">Live <span>Collaboration</span></h2>
+                        <p class="help-modal-subtitle">Direct peer-to-peer editing • Serverless &amp; private</p>
+                    </div>
+                </div>
+                <button class="help-close-btn" onclick="window.KeepLocalCollabManager && window.KeepLocalCollabManager.closeModal()" title="Close (Esc)" aria-label="Close Collaboration">
+                    <i data-lucide="x" size="16"></i>
+                </button>
+            </div>
+
+            <div id="collabInsecureBanner" class="collab-insecure-banner hidden">
+                <i data-lucide="alert-triangle" size="16"></i>
+                <div class="collab-insecure-text">
+                    <b>Insecure Context (HTTP IP):</b>
+                    <span>WebRTC encryption &amp; Clipboard APIs require a Secure Context (<code>localhost</code> or <code>HTTPS</code>).</span>
+                    <div class="collab-insecure-action">
+                        <a id="collabLocalhostLink" href="#" class="collab-insecure-btn">Switch to localhost</a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="collab-modal-tabs">
+                <button id="collabTabHost" class="collab-tab-btn active" onclick="switchCollabTab('host')">
+                    <i data-lucide="radio" size="14"></i> Share Note
+                </button>
+                <button id="collabTabJoin" class="collab-tab-btn" onclick="switchCollabTab('join')">
+                    <i data-lucide="link" size="14"></i> Join Room
+                </button>
+            </div>
+
+            <!-- Host Section -->
+            <div id="collabHostSection" class="collab-modal-section">
+                <div class="collab-form-group">
+                    <label class="collab-label">Your Name</label>
+                    <input id="collabUserNameInput" class="modal-input" placeholder="Your name (e.g. Alice)" />
+                </div>
+                <div class="collab-form-group">
+                    <label class="collab-label">Room Code</label>
+                    <div class="collab-input-action-row">
+                        <input id="collabHostRoomId" class="modal-input" spellcheck="false" placeholder="Room ID..." />
+                        <button class="modal-btn secondary" onclick="generateNewRoomCode()" title="Generate new code">
+                            <i data-lucide="refresh-cw" size="13"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="collab-form-group">
+                    <label class="collab-label">Network Strategy</label>
+                    <select id="collabHostStrategy" class="modal-input collab-select">
+                        <option value="torrent">BitTorrent Trackers (Decentralized, Recommended)</option>
+                        <option value="nostr">Nostr Relays (Decentralized)</option>
+                    </select>
+                </div>
+                <div class="collab-form-group">
+                    <label class="collab-label">Room Password (Optional E2EE)</label>
+                    <input id="collabHostPassword" type="password" class="modal-input" placeholder="Leave empty for open room" />
+                </div>
+                <div class="collab-modal-actions">
+                    <button class="modal-btn secondary" onclick="window.KeepLocalCollabManager.closeModal()">Cancel</button>
+                    <button class="modal-btn primary" onclick="startHostCollabFromModal()">Start Sharing</button>
+                </div>
+            </div>
+
+            <!-- Join Section -->
+            <div id="collabJoinSection" class="collab-modal-section hidden">
+                <div class="collab-form-group">
+                    <label class="collab-label">Room Code or Invite Link</label>
+                    <input id="collabJoinRoomId" class="modal-input" spellcheck="false" placeholder="Enter Room ID or paste link..." />
+                </div>
+                <div class="collab-form-group">
+                    <label class="collab-label">Network Strategy</label>
+                    <select id="collabJoinStrategy" class="modal-input collab-select">
+                        <option value="torrent">BitTorrent Trackers</option>
+                        <option value="nostr">Nostr Relays</option>
+                    </select>
+                </div>
+                <div class="collab-form-group">
+                    <label class="collab-label">Room Password (if protected)</label>
+                    <input id="collabJoinPassword" type="password" class="modal-input" placeholder="Optional password" />
+                </div>
+                <div class="collab-modal-actions">
+                    <button class="modal-btn secondary" onclick="window.KeepLocalCollabManager.closeModal()">Cancel</button>
+                    <button class="modal-btn primary" onclick="joinCollabFromModal()">Join Room</button>
+                </div>
+            </div>
+
+            <!-- Active Session View -->
+            <div id="collabActiveSection" class="collab-modal-section hidden">
+                <div class="collab-active-indicator">
+                    <span class="collab-active-pulse"></span>
+                    <span>Live Session Active: <b id="collabActiveRoomText"></b></span>
+                </div>
+                <div class="collab-invite-box">
+                    <label class="collab-label">Shareable Invite Link</label>
+                    <div class="collab-input-action-row">
+                        <input id="collabShareLinkInput" class="modal-input" readonly />
+                        <button id="collabCopyLinkBtn" class="modal-btn primary" onclick="copyCollabInviteLink()">
+                            <i data-lucide="copy" size="13"></i> <span>Copy</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="collab-peers-wrap">
+                    <label class="collab-label">Connected Peers</label>
+                    <div id="collabPeersList" class="collab-peers-list"></div>
+                </div>
+                <div class="collab-modal-actions">
+                    <button class="modal-btn danger" onclick="leaveCollabFromModal()">Stop Sharing / Leave</button>
+                    <button class="modal-btn secondary" onclick="window.KeepLocalCollabManager.closeModal()">Done</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Context Menu -->
     <div id="contextMenu" class="context-menu hidden">
         <div class="context-menu-item" id="ctxRename">
@@ -510,6 +647,8 @@
 
     <script src="js/db.js"></script>
     <script src="js/markdown.js"></script>
+    <script src="js/collab-bundle.js"></script>
+    <script src="js/collab.js"></script>
     <script src="js/script.js"></script>
     <script>lucide.createIcons();</script>
 </body>
