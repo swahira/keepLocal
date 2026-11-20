@@ -1632,6 +1632,46 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	async function saveImageToAttachments(fileOrDataUrl, preferredName = "") {
 		const { blob, ext, mimeType } = await imageToWebpBlob(fileOrDataUrl);
+		const folder = getOrCreateAttachmentsFolder();
+
+		// Content-hash deduplication: check if an identical image already exists in attachments
+		let incomingHash = "";
+		if (blob && blob.size > 0 && Array.isArray(folder.children)) {
+			incomingHash = await KeepLocalMarkdown.computeBlobHash(blob);
+			for (const child of folder.children) {
+				if (child.type === "file" && child.content) {
+					const childSize = child.content.size ?? child.content.byteLength ?? child.size ?? 0;
+					if (childSize === blob.size) {
+						let isMatch = false;
+						if (incomingHash && child._hash) {
+							isMatch = (incomingHash === child._hash);
+						} else if (incomingHash) {
+							child._hash = await KeepLocalMarkdown.computeBlobHash(child.content);
+							isMatch = (incomingHash === child._hash);
+						} else {
+							isMatch = await KeepLocalMarkdown.areBlobsEqual(child.content, blob);
+						}
+
+						if (isMatch) {
+							// Ensure blob URL is cached for this existing attachment
+							if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+								if (!attachmentBlobUrlMap.has(child.id) || !attachmentBlobUrlMap.has(`attachments/${child.name}`)) {
+									try {
+										const blobUrl = URL.createObjectURL(child.content instanceof Blob ? child.content : blob);
+										attachmentBlobUrlMap.set(child.id, blobUrl);
+										attachmentBlobUrlMap.set(`attachments/${child.name}`, blobUrl);
+										attachmentBlobUrlMap.set(`./attachments/${child.name}`, blobUrl);
+										attachmentBlobUrlMap.set(child.name, blobUrl);
+									} catch (_) { }
+								}
+							}
+							return `attachments/${child.name}`;
+						}
+					}
+				}
+			}
+		}
+
 		const now = new Date();
 		const pad = (n) => String(n).padStart(2, "0");
 		const dateStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
@@ -1640,7 +1680,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 		baseName = baseName.replace(/[/\\:*?"<>|]/g, "_").trim() || `image_${dateStr}`;
 		const filename = `${baseName}.${ext}`;
 
-		const folder = getOrCreateAttachmentsFolder();
 		const safeName = uniqueNodeName(folder.children, filename);
 
 		const fileNode = {
@@ -1651,7 +1690,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 			mimeType: mimeType || "image/webp",
 			content: blob,
 			size: blob.size,
-			_diskContent: null
+			_diskContent: null,
+			_hash: incomingHash || null
 		};
 
 		folder.children.push(fileNode);

@@ -18,8 +18,8 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 | **Accessibility, Responsiveness & Shortcuts** | 5 | 0 | 1 | 2 | 2 |
 | **Architecture, Offline & Security** | 4 | 1 | 1 | 1 | 1 |
 | **Post-IndexedDB Migration Engine Audit** | 14 | 2 | 7 | 5 | 0 |
-| **Issue #24 Folder Sync & Attachments Audit** | 5 | 1 | 2 | 2 | 0 |
-| **Total** | **67** | **10** | **28** | **24** | **5** |
+| **Issue #24 Folder Sync & Attachments Audit** | 6 | 1 | 2 | 3 | 0 |
+| **Total** | **68** | **10** | **28** | **25** | **5** |
 
 ---
 
@@ -678,3 +678,10 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Problem Description:** When a user clicks "Change Folder" and selects the directory that the current workspace is already connected to, `saveWorkspace()` fails to check `await handle.isSameEntry(workspaceHandle)`. Because `localFileCount > 0 && folderFileCount > 0`, it displays the "Existing Files Detected" conflict dialog and prompts the user to merge or replace, inadvertently triggering the buggy merge flow on identical directories.
   - **Impact:** Confusing prompt and unnecessary triggering of merge logic when re-selecting or re-authorizing the existing folder.
   - **How to Fix:** In `saveWorkspace()`, if `workspaceHandle && await handle.isSameEntry(workspaceHandle)`, recognize that the same folder was selected, update authorization status, and perform a clean re-sync without displaying the "Existing Files Detected" conflict modal.
+
+- [x] **AUDIT-20: Unchecked Clipboard Paste Duplication Bloating `attachments/` with Identical Files** (FIXED)
+  - **Severity:** Medium (Storage Bloat & Workspace Clutter)
+  - **Location:** [`js/script.js#L1633-L1675`](file:///home/raja/Workspace/keepLocal/js/script.js#L1633-L1675) (`saveImageToAttachments`) & [`js/markdown.js`](file:///home/raja/Workspace/keepLocal/js/markdown.js) (`computeBlobHash`, `areBlobsEqual`)
+  - **Problem Description:** Every time an image was pasted from the clipboard or entered, `saveImageToAttachments()` generated a new timestamped filename (`image_YYYYMMDD_HHMMSS.webp`) and unconditionally created a new file in `attachments/`, even if the image content was 100% identical. Pasting the same screenshot or image multiple times bloated `attachments/` with dozens of duplicate files (`image_...-1.webp`, `image_...-2.webp`, etc.).
+  - **Impact:** Accumulation of duplicate image files on disk, storage quota consumption, and explorer clutter.
+  - **How to Fix:** Implement content-hash deduplication using SHA-256 (`computeBlobHash`) and size matching in `saveImageToAttachments()`. If an identical image already exists in `attachments/`, reuse the existing attachment path instead of creating redundant files.

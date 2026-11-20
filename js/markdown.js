@@ -767,9 +767,68 @@
 		return merged;
 	}
 
+	async function computeBlobHash(blobOrBuffer) {
+		if (!blobOrBuffer) return "";
+		try {
+			let buffer;
+			if (typeof Blob !== "undefined" && blobOrBuffer instanceof Blob) {
+				buffer = await blobOrBuffer.arrayBuffer();
+			} else if (typeof ArrayBuffer !== "undefined" && blobOrBuffer instanceof ArrayBuffer) {
+				buffer = blobOrBuffer;
+			} else if (typeof ArrayBuffer !== "undefined" && blobOrBuffer?.buffer instanceof ArrayBuffer) {
+				buffer = blobOrBuffer.buffer;
+			} else if (typeof blobOrBuffer === "string") {
+				if (typeof TextEncoder !== "undefined") {
+					buffer = new TextEncoder().encode(blobOrBuffer);
+				} else {
+					return "";
+				}
+			} else {
+				return "";
+			}
+			const cryptoObj = (typeof crypto !== "undefined" ? crypto : (typeof globalThis !== "undefined" ? globalThis.crypto : null));
+			if (cryptoObj && cryptoObj.subtle && typeof cryptoObj.subtle.digest === "function") {
+				const hashBuf = await cryptoObj.subtle.digest("SHA-256", buffer);
+				const hashArray = Array.from(new Uint8Array(hashBuf));
+				return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+			}
+		} catch (_) { }
+		return "";
+	}
+
+	async function areBlobsEqual(blobA, blobB) {
+		if (blobA === blobB) return true;
+		if (!blobA || !blobB) return false;
+		const sizeA = blobA.size ?? blobA.byteLength ?? (typeof blobA === "string" ? blobA.length : 0);
+		const sizeB = blobB.size ?? blobB.byteLength ?? (typeof blobB === "string" ? blobB.length : 0);
+		if (sizeA !== sizeB || sizeA === 0) return false;
+
+		const hashA = await computeBlobHash(blobA);
+		const hashB = await computeBlobHash(blobB);
+		if (hashA && hashB) {
+			return hashA === hashB;
+		}
+
+		try {
+			const bufA = (typeof Blob !== "undefined" && blobA instanceof Blob) ? await blobA.arrayBuffer() : (blobA.buffer || blobA);
+			const bufB = (typeof Blob !== "undefined" && blobB instanceof Blob) ? await blobB.arrayBuffer() : (blobB.buffer || blobB);
+			const viewA = new Uint8Array(bufA);
+			const viewB = new Uint8Array(bufB);
+			if (viewA.length !== viewB.length) return false;
+			for (let i = 0; i < viewA.length; i++) {
+				if (viewA[i] !== viewB[i]) return false;
+			}
+			return true;
+		} catch (_) {
+			return false;
+		}
+	}
+
 	const KeepLocalMarkdown = {
 		isMarkdownFile,
 		isImageFile,
+		computeBlobHash,
+		areBlobsEqual,
 		cloneFileNode,
 		mergeFileTrees,
 		escHtml,

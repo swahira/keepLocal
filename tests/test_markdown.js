@@ -398,4 +398,26 @@ const repairedAtt = repairedTree.find(n => n.name === "attachments");
 assert.strictEqual(repairedAtt.children[0].content instanceof Blob, true, "Corrupted attachment object should be healed by healthy local blob");
 console.log("✓ mergeFileTrees binary preservation, deduplication and healing tests passed");
 
-console.log("All KeepLocalMarkdown unit tests passed successfully!");
+// 12. computeBlobHash and areBlobsEqual tests (Deduplication)
+(async () => {
+	const blob1 = new Blob(["identical image bytes 12345"], { type: "image/webp" });
+	const blob2 = new Blob(["identical image bytes 12345"], { type: "image/webp" });
+	const blob3 = new Blob(["different image bytes 99999"], { type: "image/webp" });
+
+	const hash1 = await KeepLocalMarkdown.computeBlobHash(blob1);
+	const hash2 = await KeepLocalMarkdown.computeBlobHash(blob2);
+	const hash3 = await KeepLocalMarkdown.computeBlobHash(blob3);
+
+	assert.ok(hash1 && hash1.length === 64, "SHA-256 hash must be 64-char hex string");
+	assert.strictEqual(hash1, hash2, "Identical content must yield identical hash");
+	assert.notStrictEqual(hash1, hash3, "Different content must yield different hash");
+
+	const isEqual1 = await KeepLocalMarkdown.areBlobsEqual(blob1, blob2);
+	assert.strictEqual(isEqual1, true, "Identical blobs must evaluate to equal");
+
+	const isEqual2 = await KeepLocalMarkdown.areBlobsEqual(blob1, blob3);
+	assert.strictEqual(isEqual2, false, "Different blobs must evaluate to not equal");
+	console.log("✓ computeBlobHash & areBlobsEqual attachment deduplication tests passed");
+
+	console.log("All KeepLocalMarkdown unit tests passed successfully!");
+})();
