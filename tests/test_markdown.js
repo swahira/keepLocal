@@ -126,6 +126,62 @@ const tableNoHeaderMd = KeepLocalMarkdown.blocksToText({
 });
 assert.ok(!tableNoHeaderMd.includes("| --- | --- |"));
 
+// AUDIT-21: Escaped pipes and code spans in tables
+const complexTableMd = "| Syntax | Code | Explanation |\n| --- | --- | --- |\n| a \\| b | `x | y` | Bitwise OR |\n| Line 1<br>Line 2 | `foo` | Multiline cell |";
+const complexBlocks = KeepLocalMarkdown.textToBlocks(complexTableMd);
+assert.strictEqual(complexBlocks[0].type, "table");
+assert.strictEqual(complexBlocks[0].data.content.length, 3);
+assert.strictEqual(complexBlocks[0].data.content[0].length, 3);
+assert.strictEqual(complexBlocks[0].data.content[1].length, 3, "Escaped pipe and code pipe must not split into extra columns");
+assert.strictEqual(complexBlocks[0].data.content[1][0], "a | b");
+assert.strictEqual(complexBlocks[0].data.content[1][1], "<code>x | y</code>");
+assert.strictEqual(complexBlocks[0].data.content[2][0], "Line 1<br>Line 2");
+
+const complexRoundtrip = KeepLocalMarkdown.blocksToText({ blocks: complexBlocks });
+assert.ok(complexRoundtrip.includes("a \\| b"), "Escaped pipe must be serialized as \\|");
+assert.ok(complexRoundtrip.includes("`x | y`"), "Code span with pipe must not be broken");
+assert.ok(complexRoundtrip.includes("Line 1<br>Line 2"), "<br> in cell must not create a literal newline");
+
+// AUDIT-21: Jagged table rows padding
+const jaggedBlocks = KeepLocalMarkdown.textToBlocks("| Col 1 | Col 2 | Col 3 |\n| --- | --- | --- |\n| Only One |");
+assert.strictEqual(jaggedBlocks[0].data.content[1].length, 3, "Short row must be padded with empty strings to match maxCols");
+assert.strictEqual(jaggedBlocks[0].data.content[1][1], "");
+assert.strictEqual(jaggedBlocks[0].data.content[1][2], "");
+
+// AUDIT-21: splitTableRow and formatTableCellForMd direct unit tests
+assert.deepStrictEqual(KeepLocalMarkdown.splitTableRow("| a \\| b | `c | d` | e |"), ["a \\| b", "`c | d`", "e"]);
+assert.strictEqual(KeepLocalMarkdown.formatTableCellForMd("a | b"), "a \\| b");
+assert.strictEqual(KeepLocalMarkdown.formatTableCellForMd("`x | y`"), "`x | y`");
+assert.strictEqual(KeepLocalMarkdown.formatTableCellForMd("line 1<br>line 2"), "line 1<br>line 2");
+
+// AUDIT-22: Standard GFM tables without outer pipes
+const noOuterPipesTableMd = "Name | Age | Role\n---|---|---\nAlice | 30 | Engineer\nBob | 25 | Designer";
+const noOuterPipesBlocks = KeepLocalMarkdown.textToBlocks(noOuterPipesTableMd);
+assert.strictEqual(noOuterPipesBlocks[0].type, "table");
+assert.strictEqual(noOuterPipesBlocks[0].data.withHeadings, true);
+assert.deepStrictEqual(noOuterPipesBlocks[0].data.content, [
+	["Name", "Age", "Role"],
+	["Alice", "30", "Engineer"],
+	["Bob", "25", "Designer"]
+]);
+
+// Non-table with inline pipe should not be parsed as table
+const nonTableMd = "Choose Option A | Option B in settings.\nClick Apply to confirm.";
+const nonTableBlocks = KeepLocalMarkdown.textToBlocks(nonTableMd);
+assert.strictEqual(nonTableBlocks[0].type, "paragraph");
+assert.strictEqual(nonTableBlocks[1].type, "paragraph");
+
+// AUDIT-23: Unescaped <br> and strikethrough ~~ in markdown parser
+assert.strictEqual(KeepLocalMarkdown.md2h("Hello<br>World"), "Hello<br>World");
+assert.strictEqual(KeepLocalMarkdown.md2h("Hello<br/>World"), "Hello<br>World");
+assert.strictEqual(KeepLocalMarkdown.h2md("Hello<br>World"), "Hello\nWorld");
+assert.strictEqual(KeepLocalMarkdown.md2h("This is ~~strike~~"), "This is <s>strike</s>");
+assert.strictEqual(KeepLocalMarkdown.h2md("This is <s>strike</s>"), "This is ~~strike~~");
+assert.strictEqual(KeepLocalMarkdown.h2md("This is <del>deleted</del>"), "This is ~~deleted~~");
+assert.strictEqual(KeepLocalMarkdown.h2md("This is <strike>struck</strike>"), "This is ~~struck~~");
+assert.strictEqual(KeepLocalMarkdown.md2h("~~**bold strike**~~"), "<s><b>bold strike</b></s>");
+assert.strictEqual(KeepLocalMarkdown.h2md("<s><b>bold strike</b></s>"), "~~**bold strike**~~");
+
 console.log("✓ textToBlocks tests passed");
 
 // 7. blocksToText roundtrip
@@ -201,6 +257,223 @@ for (let r = 0; r < 5; r++) {
 	doubleCur = KeepLocalMarkdown.blocksToText({ blocks: KeepLocalMarkdown.textToBlocks(doubleCur) });
 }
 assert.strictEqual(doubleCur, doubleBlank, "Intentional double blank lines should be preserved across roundtrips");
+
+// Test Editor.js simulation: Editor.js paragraph tool discards `tight` on save
+const userCase = "Text 1\n\n\nText 2";
+let userCur = userCase;
+for (let r = 0; r < 5; r++) {
+	const rawBlocks = KeepLocalMarkdown.textToBlocks(userCur);
+	const editorSavedBlocks = rawBlocks.map(b => {
+		if (b.type === "paragraph") {
+			return { type: "paragraph", data: { text: b.data?.text || "" } };
+		}
+		return b;
+	});
+	userCur = KeepLocalMarkdown.blocksToText({ blocks: editorSavedBlocks });
+}
+assert.strictEqual(userCur, userCase, "Two blank lines between texts should not double across Editor.js roundtrips");
+
+// Test multiple blank lines with Editor.js stripped tight metadata
+const tripleBlank = "Text 1\n\n\n\nText 2";
+let tripleCur = tripleBlank;
+for (let r = 0; r < 5; r++) {
+	const rawBlocks = KeepLocalMarkdown.textToBlocks(tripleCur);
+	const editorSavedBlocks = rawBlocks.map(b => {
+		if (b.type === "paragraph") {
+			return { type: "paragraph", data: { text: b.data?.text || "" } };
+		}
+		return b;
+	});
+	tripleCur = KeepLocalMarkdown.blocksToText({ blocks: editorSavedBlocks });
+}
+assert.strictEqual(tripleCur, tripleBlank, "Three blank lines between texts should not double across Editor.js roundtrips");
+
+// Test Editor.js empty paragraph saved with <br>
+const brBlocks = [
+	{ type: "paragraph", data: { text: "Text 1" } },
+	{ type: "paragraph", data: { text: "<br>" } },
+	{ type: "paragraph", data: { text: "Text 2" } }
+];
+assert.strictEqual(KeepLocalMarkdown.blocksToText({ blocks: brBlocks }), "Text 1\n\n\nText 2");
 console.log("✓ tight image and roundtrip idempotency tests passed");
 
-console.log("All KeepLocalMarkdown unit tests passed successfully!");
+// 9. isImageFile tests
+assert.strictEqual(KeepLocalMarkdown.isImageFile("photo.webp"), true);
+assert.strictEqual(KeepLocalMarkdown.isImageFile("image.PNG"), true);
+assert.strictEqual(KeepLocalMarkdown.isImageFile("vector.svg"), true);
+assert.strictEqual(KeepLocalMarkdown.isImageFile("notes.md"), false);
+assert.strictEqual(KeepLocalMarkdown.isImageFile(""), false);
+assert.strictEqual(KeepLocalMarkdown.isImageFile(null), false);
+console.log("✓ isImageFile tests passed");
+
+// 10. cloneFileNode tests
+const mockBlob = new Blob(["sample image binary data"], { type: "image/webp" });
+const originalTree = {
+	id: "folder_1",
+	name: "attachments",
+	type: "folder",
+	children: [
+		{
+			id: "file_img_1",
+			name: "image_1.webp",
+			type: "file",
+			isBinary: true,
+			content: mockBlob
+		}
+	]
+};
+
+const clonedTree = KeepLocalMarkdown.cloneFileNode(originalTree);
+assert.notStrictEqual(clonedTree, originalTree, "Root folder must be a new object reference");
+assert.notStrictEqual(clonedTree.children, originalTree.children, "Children array must be a new reference");
+assert.strictEqual(clonedTree.children[0].content instanceof Blob, true, "Cloned file content must remain an instance of Blob");
+assert.strictEqual(clonedTree.children[0].content, mockBlob, "Blob reference must be preserved without serialization corruption");
+// Mutating clone children shouldn't affect original
+clonedTree.children.push({ id: "file_2", name: "new.md", type: "file" });
+assert.strictEqual(originalTree.children.length, 1, "Original tree children must not be mutated");
+console.log("✓ cloneFileNode tests passed");
+
+// 11. mergeFileTrees tests
+const imgBlobA = new Blob(["blob_a_data"], { type: "image/webp" });
+const imgBlobB = new Blob(["blob_b_data"], { type: "image/webp" });
+
+const baseFolderNodes = [
+	{
+		id: "f_attachments",
+		name: "attachments",
+		type: "folder",
+		children: [
+			{
+				id: "f_img_1",
+				name: "diagram.webp",
+				type: "file",
+				isBinary: true,
+				mimeType: "image/webp",
+				content: imgBlobA
+			}
+		]
+	},
+	{
+		id: "f_doc_1",
+		name: "untitled.md",
+		type: "file",
+		content: "# Original Disk Content"
+	}
+];
+
+const localWorkspaceNodes = [
+	{
+		id: "f_attachments_local",
+		name: "attachments",
+		type: "folder",
+		children: [
+			{
+				id: "f_img_1_local",
+				name: "diagram.webp",
+				type: "file",
+				isBinary: true,
+				mimeType: "image/webp",
+				content: imgBlobB
+			}
+		]
+	},
+	{
+		id: "f_doc_1_local",
+		name: "untitled.md",
+		type: "file",
+		content: "# Modified Local Content"
+	},
+	{
+		id: "f_doc_2_local",
+		name: "untitled-1.md",
+		type: "file",
+		content: "# New Local Note"
+	}
+];
+
+const mergedTree = KeepLocalMarkdown.mergeFileTrees(baseFolderNodes, localWorkspaceNodes);
+
+// A. Attachment folder checks
+const mergedAttachments = mergedTree.find(n => n.name === "attachments");
+assert.ok(mergedAttachments, "Merged tree must contain attachments folder");
+assert.strictEqual(mergedAttachments.children.length, 1, "Duplicate attachment images must NOT be generated with (local) copies");
+assert.strictEqual(mergedAttachments.children[0].content instanceof Blob, true, "Attachment content must remain an instance of Blob, never {}");
+assert.strictEqual(mergedAttachments.children[0].name, "diagram.webp");
+
+// B. Text file conflict checks
+const docOriginal = mergedTree.find(n => n.name === "untitled.md");
+assert.ok(docOriginal, "Base file must be preserved in merged tree");
+assert.strictEqual(docOriginal.content, "# Original Disk Content");
+
+const docLocalCopy = mergedTree.find(n => n.name === "untitled (local).md");
+assert.ok(docLocalCopy, "Conflicting local text file must be preserved as (local)");
+assert.strictEqual(docLocalCopy.content, "# Modified Local Content");
+
+// C. New non-conflicting local note checks
+const docNew = mergedTree.find(n => n.name === "untitled-1.md");
+assert.ok(docNew, "New unique local note must be merged into tree");
+assert.strictEqual(docNew.content, "# New Local Note");
+
+// D. Repair corrupted attachment test
+const corruptedBase = [
+	{
+		id: "f_att",
+		name: "attachments",
+		type: "folder",
+		children: [
+			{
+				id: "f_corrupted",
+				name: "corrupted.webp",
+				type: "file",
+				isBinary: true,
+				content: {} // simulated corrupted content
+			}
+		]
+	}
+];
+
+const healthyLocal = [
+	{
+		id: "f_att_l",
+		name: "attachments",
+		type: "folder",
+		children: [
+			{
+				id: "f_healthy",
+				name: "corrupted.webp",
+				type: "file",
+				isBinary: true,
+				content: imgBlobA
+			}
+		]
+	}
+];
+
+const repairedTree = KeepLocalMarkdown.mergeFileTrees(corruptedBase, healthyLocal);
+const repairedAtt = repairedTree.find(n => n.name === "attachments");
+assert.strictEqual(repairedAtt.children[0].content instanceof Blob, true, "Corrupted attachment object should be healed by healthy local blob");
+console.log("✓ mergeFileTrees binary preservation, deduplication and healing tests passed");
+
+// 12. computeBlobHash and areBlobsEqual tests (Deduplication)
+(async () => {
+	const blob1 = new Blob(["identical image bytes 12345"], { type: "image/webp" });
+	const blob2 = new Blob(["identical image bytes 12345"], { type: "image/webp" });
+	const blob3 = new Blob(["different image bytes 99999"], { type: "image/webp" });
+
+	const hash1 = await KeepLocalMarkdown.computeBlobHash(blob1);
+	const hash2 = await KeepLocalMarkdown.computeBlobHash(blob2);
+	const hash3 = await KeepLocalMarkdown.computeBlobHash(blob3);
+
+	assert.ok(hash1 && hash1.length === 64, "SHA-256 hash must be 64-char hex string");
+	assert.strictEqual(hash1, hash2, "Identical content must yield identical hash");
+	assert.notStrictEqual(hash1, hash3, "Different content must yield different hash");
+
+	const isEqual1 = await KeepLocalMarkdown.areBlobsEqual(blob1, blob2);
+	assert.strictEqual(isEqual1, true, "Identical blobs must evaluate to equal");
+
+	const isEqual2 = await KeepLocalMarkdown.areBlobsEqual(blob1, blob3);
+	assert.strictEqual(isEqual2, false, "Different blobs must evaluate to not equal");
+	console.log("✓ computeBlobHash & areBlobsEqual attachment deduplication tests passed");
+
+	console.log("All KeepLocalMarkdown unit tests passed successfully!");
+})();

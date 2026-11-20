@@ -257,9 +257,12 @@
 	function md2h(s) {
 		if (!s) return "";
 		let res = escHtml(s);
+		res = res.replace(/&lt;br\s*\/?&gt;/gi, '<br>');
 		res = res.replace(/&lt;u&gt;(.*?)&lt;\/u&gt;/gi, '<u class="cdx-underline">$1</u>');
 		res = res.replace(/&lt;mark(?: class="cdx-marker")?&gt;(.*?)&lt;\/mark&gt;/gi, '<mark class="cdx-marker">$1</mark>');
 		res = res.replace(/==([^=]+)==/g, '<mark class="cdx-marker">$1</mark>');
+		res = res.replace(/~~(.*?)~~/g, '<s>$1</s>');
+		res = res.replace(/&lt;(?:s|strike|del)&gt;(.*?)&lt;\/(?:s|strike|del)&gt;/gi, '<s>$1</s>');
 		res = replaceMarkdownLinksAndImages(res, sanitizeUrl);
 
 		// Mask HTML tags to avoid corrupting attributes
@@ -316,6 +319,7 @@
 			})
 			.replace(/<mark[^>]*>(.*?)<\/mark>/gi, "==$1==")
 			.replace(/<u[^>]*>(.*?)<\/u>/gi, "%%%U_OPEN%%%$1%%%U_CLOSE%%%")
+			.replace(/<(?:s|strike|del)[^>]*>(.*?)<\/(?:s|strike|del)>/gi, "~~$1~~")
 			.replace(/<b>(.*?)<\/b>/gi, "**$1**").replace(/<strong>(.*?)<\/strong>/gi, "**$1**")
 			.replace(/<i>(.*?)<\/i>/gi, "*$1*").replace(/<em>(.*?)<\/em>/gi, "*$1*")
 			.replace(/<code[^>]*>(.*?)<\/code>/gi, "`$1`")
@@ -330,15 +334,204 @@
 			.replace(/%%%U_OPEN%%%/g, "<u>").replace(/%%%U_CLOSE%%%/g, "</u>");
 	}
 
+	function hasUnescapedPipe(str) {
+		if (!str || !str.includes("|")) return false;
+		let inBacktick = false;
+		let backtickCount = 0;
+		let i = 0;
+		while (i < str.length) {
+			if (str[i] === "\\") {
+				i += 2;
+				continue;
+			}
+			if (str[i] === "`") {
+				let count = 0;
+				while (i < str.length && str[i] === "`") {
+					count++;
+					i++;
+				}
+				if (!inBacktick) {
+					inBacktick = true;
+					backtickCount = count;
+				} else if (backtickCount === count) {
+					inBacktick = false;
+					backtickCount = 0;
+				}
+				continue;
+			}
+			if (str[i] === "|" && !inBacktick) return true;
+			i++;
+		}
+		return false;
+	}
+
+	function isTableDelimiterRow(str) {
+		if (!str) return false;
+		const trimmed = str.trim();
+		if (!trimmed || !trimmed.includes("|") || !trimmed.includes("-")) return false;
+		const parts = splitTableRow(trimmed);
+		return parts.length >= 1 && parts.every(p => /^:?-+:?$/.test(p.trim()));
+	}
+
+	function splitTableRow(rowStr) {
+		if (!rowStr) return [];
+		let str = rowStr.trim();
+		if (str.startsWith("|")) str = str.slice(1);
+		if (str.endsWith("|") && !str.endsWith("\\|")) str = str.slice(0, -1);
+
+		const cells = [];
+		let current = "";
+		let inBacktick = false;
+		let backtickCount = 0;
+		let i = 0;
+
+		while (i < str.length) {
+			const char = str[i];
+			if (char === "\\") {
+				if (i + 1 < str.length && str[i + 1] === "|") {
+					current += "\\|";
+					i += 2;
+					continue;
+				}
+				current += char;
+				i++;
+				continue;
+			}
+			if (char === "`") {
+				let count = 0;
+				while (i < str.length && str[i] === "`") {
+					count++;
+					current += "`";
+					i++;
+				}
+				if (!inBacktick) {
+					inBacktick = true;
+					backtickCount = count;
+				} else if (backtickCount === count) {
+					inBacktick = false;
+					backtickCount = 0;
+				}
+				continue;
+			}
+			if (char === "|" && !inBacktick) {
+				cells.push(current.trim());
+				current = "";
+				i++;
+				continue;
+			}
+			current += char;
+			i++;
+		}
+		cells.push(current.trim());
+		return cells;
+	}
+
+	function unescapeCellPipes(cellStr) {
+		if (!cellStr) return "";
+		let res = "";
+		let inBacktick = false;
+		let backtickCount = 0;
+		let i = 0;
+		while (i < cellStr.length) {
+			if (cellStr[i] === "\\") {
+				if (i + 1 < cellStr.length && cellStr[i + 1] === "|") {
+					res += "|";
+					i += 2;
+					continue;
+				}
+				res += cellStr[i];
+				i++;
+				continue;
+			}
+			if (cellStr[i] === "`") {
+				let count = 0;
+				while (i < cellStr.length && cellStr[i] === "`") {
+					count++;
+					res += "`";
+					i++;
+				}
+				if (!inBacktick) {
+					inBacktick = true;
+					backtickCount = count;
+				} else if (backtickCount === count) {
+					inBacktick = false;
+					backtickCount = 0;
+				}
+				continue;
+			}
+			res += cellStr[i];
+			i++;
+		}
+		return res;
+	}
+
+	function formatTableCellForMd(html) {
+		if (!html) return "";
+		let text = html.replace(/<br\s*\/?>/gi, "%%%BR_TOKEN%%%");
+		let converted = h2md(text);
+		converted = converted.replace(/%%%BR_TOKEN%%%/g, "<br>");
+		let res = "";
+		let inBacktick = false;
+		let backtickCount = 0;
+		let i = 0;
+		while (i < converted.length) {
+			if (converted[i] === "\\") {
+				if (i + 1 < converted.length && converted[i + 1] === "|") {
+					res += "\\|";
+					i += 2;
+					continue;
+				}
+				res += converted[i];
+				i++;
+				continue;
+			}
+			if (converted[i] === "`") {
+				let count = 0;
+				while (i < converted.length && converted[i] === "`") {
+					count++;
+					res += "`";
+					i++;
+				}
+				if (!inBacktick) {
+					inBacktick = true;
+					backtickCount = count;
+				} else if (backtickCount === count) {
+					inBacktick = false;
+					backtickCount = 0;
+				}
+				continue;
+			}
+			if (converted[i] === "|" && !inBacktick) {
+				res += "\\|";
+				i++;
+				continue;
+			}
+			if (converted[i] === "\n") {
+				res += "<br>";
+				i++;
+				continue;
+			}
+			res += converted[i];
+			i++;
+		}
+		return res;
+	}
+
 	function serializeBlockLines(b) {
 		const lines = [];
 		switch (b.type) {
 			case "header":
 				lines.push("#".repeat(b.data?.level || 1) + " " + h2md(b.data?.text || ""));
 				break;
-			case "paragraph":
-				lines.push(h2md(b.data?.text || ""));
+			case "paragraph": {
+				const rawText = b.data?.text || "";
+				if (!rawText || rawText === "<br>" || rawText === "<br/>" || rawText.trim() === "") {
+					lines.push("");
+				} else {
+					lines.push(h2md(rawText));
+				}
 				break;
+			}
 			case "delimiter":
 				lines.push("---");
 				break;
@@ -401,7 +594,7 @@
 				const content = b.data?.content || [];
 				if (content.length) {
 					content.forEach((row, idx) => {
-						lines.push("| " + row.map(c => h2md(c)).join(" | ") + " |");
+						lines.push("| " + row.map(c => formatTableCellForMd(c)).join(" | ") + " |");
 						if (idx === 0 && b.data?.withHeadings !== false) {
 							lines.push("| " + row.map(() => "---").join(" | ") + " |");
 						}
@@ -443,18 +636,29 @@
 
 		const flushTable = () => {
 			if (!tableBuf.length) return;
-			const hasHeaderSep = tableBuf.length > 1 && tableBuf[1].split("|").slice(1, -1).every(c => /^:?-+:?$/.test(c.trim()));
+			const hasHeaderSep = tableBuf.length > 1 && isTableDelimiterRow(tableBuf[1]);
 			const content = tableBuf
-				.map(r => r.split("|").slice(1, -1).map(c => c.trim()))
-				.filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c)));
+				.map(r => splitTableRow(r).map(c => {
+					const unescaped = unescapeCellPipes(c);
+					let html = md2h(unescaped);
+					return html;
+				}))
+				.filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c.trim())));
 			if (content.length) {
+				const maxCols = Math.max(...content.map(r => r.length), 0);
+				if (maxCols > 0) {
+					content.forEach(r => {
+						while (r.length < maxCols) r.push("");
+					});
+				}
 				blocks.push({ type: "table", data: { content, withHeadings: hasHeaderSep, tight: tableTight } });
 			}
 			tableBuf = [];
 			tableTight = false;
 		};
 
-		for (const line of lines) {
+		for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+			const line = lines[lineIdx];
 			if (line.trim().startsWith("```")) {
 				listStack = [];
 				if (inCode) {
@@ -476,7 +680,11 @@
 			}
 			if (inCode) { codeBuf.push(line); continue; }
 
-			if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+			const isTableLine = (tableBuf.length === 0)
+				? ((line.trim().startsWith("|") && line.trim().endsWith("|")) || (hasUnescapedPipe(line) && lineIdx + 1 < lines.length && isTableDelimiterRow(lines[lineIdx + 1])))
+				: ((line.trim().startsWith("|") && line.trim().endsWith("|")) || hasUnescapedPipe(line) || isTableDelimiterRow(line));
+
+			if (isTableLine) {
 				listStack = [];
 				if (tableBuf.length === 0) {
 					if (blocks.length > 0 && blankCount > 1) {
@@ -635,11 +843,12 @@
 			const b = data.blocks[i];
 			const bl = serializeBlockLines(b);
 			const blockText = bl.join("\n");
+			const isEmptyParagraph = (b.type === "paragraph" && (!b.data?.text || b.data.text === "<br>" || b.data.text === "<br/>" || b.data.text.trim() === ""));
 
 			if (i === 0) {
 				result.push(blockText);
 			} else {
-				if (b.data?.tight) {
+				if (b.data?.tight || isEmptyParagraph) {
 					result.push("\n" + blockText);
 				} else {
 					result.push("\n\n" + blockText);
@@ -673,8 +882,157 @@
 		return stack;
 	}
 
+	function isImageFile(filename) {
+		if (!filename || typeof filename !== "string") return false;
+		const ext = filename.split(".").pop()?.toLowerCase();
+		return ["webp", "png", "jpg", "jpeg", "gif", "svg", "bmp", "ico", "avif"].includes(ext);
+	}
+
+	function cloneFileNode(node) {
+		if (!node || typeof node !== "object") return node;
+		const copy = { ...node };
+		if (Array.isArray(node.children)) {
+			copy.children = node.children.map(cloneFileNode);
+		}
+		return copy;
+	}
+
+	function mergeFileTrees(baseFolderFiles, localFiles, options = {}) {
+		const genId = typeof options.idGenerator === "function"
+			? options.idGenerator
+			: () => "file_" + Math.random().toString(36).slice(2, 9);
+		const nameExists = typeof options.nameExists === "function"
+			? options.nameExists
+			: (arr, name) => arr.some(n => n.name?.toLowerCase() === name?.toLowerCase());
+		const isImg = typeof options.isImage === "function"
+			? options.isImage
+			: isImageFile;
+
+		const merged = (baseFolderFiles || []).map(cloneFileNode);
+
+		function mergeNodes(targetArr, sourceNodes) {
+			for (const src of (sourceNodes || [])) {
+				if (!src) continue;
+				if (src.type === "file") {
+					const existing = targetArr.find(x => x.type === "file" && x.name?.toLowerCase() === src.name?.toLowerCase());
+					if (!existing) {
+						targetArr.push(cloneFileNode(src));
+					} else {
+						const isSrcImg = !!(src.isBinary || isImg(src.name));
+						const isExistingImg = !!(existing.isBinary || isImg(existing.name));
+
+						if (isSrcImg || isExistingImg) {
+							// For binary / image attachments, preserve valid content and prevent duplicate (local) files
+							const hasExistingContent = existing.content && (typeof existing.content !== "object" || (typeof Blob !== "undefined" && existing.content instanceof Blob) || (typeof ArrayBuffer !== "undefined" && (existing.content instanceof ArrayBuffer || ArrayBuffer.isView(existing.content))));
+							const hasSrcContent = src.content && (typeof src.content !== "object" || (typeof Blob !== "undefined" && src.content instanceof Blob) || (typeof ArrayBuffer !== "undefined" && (src.content instanceof ArrayBuffer || ArrayBuffer.isView(src.content))));
+
+							if (!hasExistingContent && hasSrcContent) {
+								existing.content = src.content;
+								existing.isBinary = true;
+								if (src.mimeType) existing.mimeType = src.mimeType;
+								if (src.size) existing.size = src.size;
+							}
+						} else {
+							// For text notes, compare text strings
+							const existingContent = typeof existing.content === "string" ? existing.content : "";
+							const srcContent = typeof src.content === "string" ? src.content : "";
+							if (existingContent !== srcContent) {
+								const dot = src.name.lastIndexOf(".");
+								const baseName = dot > 0 ? src.name.slice(0, dot) : src.name;
+								const ext = dot > 0 ? src.name.slice(dot) : "";
+								let counter = 1;
+								let uniqueName = `${baseName} (local)${ext}`;
+								while (nameExists(targetArr, uniqueName)) {
+									counter++;
+									uniqueName = `${baseName} (local ${counter})${ext}`;
+								}
+								const copy = cloneFileNode(src);
+								copy.id = genId();
+								copy.name = uniqueName;
+								targetArr.push(copy);
+							}
+						}
+					}
+				} else if (src.type === "folder") {
+					const existingFolder = targetArr.find(x => x.type === "folder" && x.name?.toLowerCase() === src.name?.toLowerCase());
+					if (!existingFolder) {
+						targetArr.push(cloneFileNode(src));
+					} else {
+						existingFolder.children = existingFolder.children || [];
+						mergeNodes(existingFolder.children, src.children || []);
+					}
+				}
+			}
+		}
+
+		mergeNodes(merged, localFiles || []);
+		return merged;
+	}
+
+	async function computeBlobHash(blobOrBuffer) {
+		if (!blobOrBuffer) return "";
+		try {
+			let buffer;
+			if (typeof Blob !== "undefined" && blobOrBuffer instanceof Blob) {
+				buffer = await blobOrBuffer.arrayBuffer();
+			} else if (typeof ArrayBuffer !== "undefined" && blobOrBuffer instanceof ArrayBuffer) {
+				buffer = blobOrBuffer;
+			} else if (typeof ArrayBuffer !== "undefined" && blobOrBuffer?.buffer instanceof ArrayBuffer) {
+				buffer = blobOrBuffer.buffer;
+			} else if (typeof blobOrBuffer === "string") {
+				if (typeof TextEncoder !== "undefined") {
+					buffer = new TextEncoder().encode(blobOrBuffer);
+				} else {
+					return "";
+				}
+			} else {
+				return "";
+			}
+			const cryptoObj = (typeof crypto !== "undefined" ? crypto : (typeof globalThis !== "undefined" ? globalThis.crypto : null));
+			if (cryptoObj && cryptoObj.subtle && typeof cryptoObj.subtle.digest === "function") {
+				const hashBuf = await cryptoObj.subtle.digest("SHA-256", buffer);
+				const hashArray = Array.from(new Uint8Array(hashBuf));
+				return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+			}
+		} catch (_) { }
+		return "";
+	}
+
+	async function areBlobsEqual(blobA, blobB) {
+		if (blobA === blobB) return true;
+		if (!blobA || !blobB) return false;
+		const sizeA = blobA.size ?? blobA.byteLength ?? (typeof blobA === "string" ? blobA.length : 0);
+		const sizeB = blobB.size ?? blobB.byteLength ?? (typeof blobB === "string" ? blobB.length : 0);
+		if (sizeA !== sizeB || sizeA === 0) return false;
+
+		const hashA = await computeBlobHash(blobA);
+		const hashB = await computeBlobHash(blobB);
+		if (hashA && hashB) {
+			return hashA === hashB;
+		}
+
+		try {
+			const bufA = (typeof Blob !== "undefined" && blobA instanceof Blob) ? await blobA.arrayBuffer() : (blobA.buffer || blobA);
+			const bufB = (typeof Blob !== "undefined" && blobB instanceof Blob) ? await blobB.arrayBuffer() : (blobB.buffer || blobB);
+			const viewA = new Uint8Array(bufA);
+			const viewB = new Uint8Array(bufB);
+			if (viewA.length !== viewB.length) return false;
+			for (let i = 0; i < viewA.length; i++) {
+				if (viewA[i] !== viewB[i]) return false;
+			}
+			return true;
+		} catch (_) {
+			return false;
+		}
+	}
+
 	const KeepLocalMarkdown = {
 		isMarkdownFile,
+		isImageFile,
+		computeBlobHash,
+		areBlobsEqual,
+		cloneFileNode,
+		mergeFileTrees,
 		escHtml,
 		sanitizeUrl,
 		parseStandaloneImage,
@@ -685,7 +1043,13 @@
 		h2md,
 		textToBlocks,
 		blocksToText,
-		resolveSafeZipPath
+		serializeBlockLines,
+		resolveSafeZipPath,
+		splitTableRow,
+		unescapeCellPipes,
+		formatTableCellForMd,
+		hasUnescapedPipe,
+		isTableDelimiterRow
 	};
 
 	global.KeepLocalMarkdown = KeepLocalMarkdown;

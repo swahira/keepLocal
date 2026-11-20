@@ -722,14 +722,94 @@ document.addEventListener("DOMContentLoaded", async () => {
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });
 
-			// Check if a workspace already exists for this exact folder on disk
-			const matchedWs = await findWorkspaceByHandle(handle);
-			if (matchedWs) {
-				// Reconnect the handle and open it
+			// Check if workspaces already exist for this exact folder on disk
+			const matchingWorkspaces = [];
+			for (const w of workspaces) {
+				if (w.folderName) {
+					try {
+						const storedHandle = await idbGet(`handle_${w.id}`);
+						if (storedHandle && typeof handle.isSameEntry === "function") {
+							if (await handle.isSameEntry(storedHandle)) {
+								matchingWorkspaces.push(w);
+							}
+						}
+					} catch (_) { }
+				}
+			}
+
+			if (matchingWorkspaces.length > 0) {
+				let matchedWs = matchingWorkspaces[0];
+
+				if (matchingWorkspaces.length > 1) {
+					const choiceAction = await new Promise(res => {
+						showChoiceModal({
+							title: "Folder Linked to Multiple Workspaces",
+							message: `The folder "${handle.name}" is currently linked to ${matchingWorkspaces.length} workspaces: ${matchingWorkspaces.map(w => `"${w.name}"`).join(" and ")}. Which workspace would you like to open?`,
+							choices: [
+								...matchingWorkspaces.map((w, idx) => ({
+									label: `Open "${w.name}"`,
+									description: `Open workspace "${w.name}" with this folder.`,
+									action: `open_${w.id}`,
+									primary: idx === 0
+								})),
+								{
+									label: `Consolidate to "${matchingWorkspaces[0].name}"`,
+									description: `Unlink other duplicate workspaces and keep only "${matchingWorkspaces[0].name}".`,
+									action: "consolidate"
+								},
+								{
+									label: "Cancel",
+									description: "Do not open this folder.",
+									action: "cancel"
+								}
+							],
+							onSelect: act => res(act)
+						});
+					});
+
+					if (!choiceAction || choiceAction === "cancel") return;
+
+					if (choiceAction === "consolidate") {
+						matchedWs = matchingWorkspaces[0];
+						for (let i = 1; i < matchingWorkspaces.length; i++) {
+							const dup = matchingWorkspaces[i];
+							dup.folderName = null;
+							await idbDel(`handle_${dup.id}`);
+						}
+						saveWorkspaceMeta();
+					} else if (choiceAction.startsWith("open_")) {
+						const chosenId = choiceAction.replace("open_", "");
+						matchedWs = matchingWorkspaces.find(w => w.id === chosenId) || matchingWorkspaces[0];
+					}
+				}
+
+				// Reconnect the handle and read current disk state
 				workspaceHandle = handle;
 				fsPermissionGranted = true;
 				await idbSet(`handle_${matchedWs.id}`, handle);
-				await openWorkspace(matchedWs.id);
+
+				// Retrieve any existing in-memory / IDB files for this workspace
+				let currentFiles = [];
+				try {
+					currentFiles = await KeepLocalDB.getFiles(matchedWs.id);
+				} catch (_) { }
+
+				// Read physical directory from disk, preserving existing node IDs and open states
+				const diskFiles = await readDirectoryHandle(handle, currentFiles);
+
+				// Reconcile disk files with any unsaved/unsynced local files
+				let mergedFiles = diskFiles;
+				if (currentFiles && currentFiles.length > 0) {
+					mergedFiles = mergeFileTrees(diskFiles, currentFiles);
+				}
+
+				files = mergedFiles;
+				matchedWs.fileCount = countAllFiles(files);
+				matchedWs.folderName = handle.name;
+				saveWorkspaceMeta();
+				saveWsFiles(matchedWs.id);
+
+				await openWorkspace(matchedWs.id, true /* skip file load, already freshly read & merged from disk */);
 				return;
 			}
 
@@ -764,9 +844,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 								workspaceHandle = handle;
 								fsPermissionGranted = true;
 								await idbSet(`handle_${orphanedWs.id}`, handle);
-								const readFiles = await readDirectoryHandle(handle);
-								files = readFiles;
+
+								let currentFiles = [];
+								try {
+									currentFiles = await KeepLocalDB.getFiles(orphanedWs.id);
+								} catch (_) { }
+
+								const readFiles = await readDirectoryHandle(handle, currentFiles);
+								let mergedFiles = readFiles;
+								if (currentFiles && currentFiles.length > 0) {
+									mergedFiles = mergeFileTrees(readFiles, currentFiles);
+								}
+
+								files = mergedFiles;
 								orphanedWs.fileCount = countAllFiles(files);
+								orphanedWs.folderName = handle.name;
 								saveWorkspaceMeta();
 								saveWsFiles(orphanedWs.id);
 								await openWorkspace(orphanedWs.id, true);
@@ -982,6 +1074,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 						fsPermissionGranted = (perm === "granted");
 					}
 				} catch (e) { console.warn("Could not restore handle:", e); }
+			}
+
+			// If workspace is linked to a directory with granted permission but in-memory files are empty, auto-populate from disk
+			if (workspaceHandle && fsPermissionGranted && (!files || files.length === 0)) {
+				try {
+					const diskFiles = await readDirectoryHandle(workspaceHandle);
+					if (diskFiles && diskFiles.length > 0) {
+						files = diskFiles;
+						ws.fileCount = countAllFiles(files);
+						saveWorkspaceMeta();
+						saveWsFiles(wsId);
+					}
+				} catch (readErr) {
+					console.warn("[KeepLocal] Error auto-populating empty workspace from disk:", readErr);
+				}
 			}
 
 			// Validate selectedId
@@ -1321,6 +1428,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (perm === "granted") {
 				fsPermissionGranted = true;
 				updateFolderUI();
+
+				// If in-memory files are empty, auto-populate from disk
+				if (!files || files.length === 0) {
+					try {
+						const diskFiles = await readDirectoryHandle(workspaceHandle);
+						if (diskFiles && diskFiles.length > 0) {
+							files = diskFiles;
+							if (activeWsId) {
+								updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
+								saveWsFiles(activeWsId);
+							}
+							render();
+							await loadFile();
+						}
+					} catch (readErr) {
+						console.warn("[KeepLocal] Error reading disk files after reauthorization:", readErr);
+					}
+				}
+
 				await syncWorkspace(true);
 			} else {
 				showAlertModal(
@@ -1449,7 +1575,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (!url || typeof url !== "string") return "";
 		const trimmed = url.trim();
 		if (/^(?:https?:\/\/|data:|blob:)/i.test(trimmed)) {
-			return trimmed;
+			// If it's a data or blob URL, return directly
+			if (!/^https?:\/\//i.test(trimmed)) {
+				return trimmed;
+			}
+			// If it's an HTTP/HTTPS URL, check if it points to an attachments path and exists locally
+			const attMatch = trimmed.match(/\/attachments\/([^/?#]+)/i);
+			if (attMatch) {
+				const leaf = decodeURIComponent(attMatch[1]);
+				if (attachmentBlobUrlMap.has(leaf)) return attachmentBlobUrlMap.get(leaf);
+				if (attachmentBlobUrlMap.has(`attachments/${leaf}`)) return attachmentBlobUrlMap.get(`attachments/${leaf}`);
+				const attachmentsFolder = files.find(n => n.type === "folder" && n.name.toLowerCase() === "attachments");
+				const found = attachmentsFolder?.children?.some(c => c.name.toLowerCase() === leaf.toLowerCase());
+				if (!found) {
+					return trimmed;
+				}
+				// If found locally in attachments, fall through so it gets resolved and cached below
+			} else {
+				return trimmed;
+			}
 		}
 
 		if (attachmentBlobUrlMap.has(trimmed)) {
@@ -1498,6 +1642,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					attachmentBlobUrlMap.set(`/attachments/${targetNode.name}`, existing);
 					attachmentBlobUrlMap.set(targetNode.name, existing);
 				}
+				attachmentBlobUrlMap.set(trimmed, existing);
 				return existing;
 			} else if (typeof targetNode.content === "string") {
 				if (targetNode.content.startsWith("data:image/")) {
@@ -1508,6 +1653,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					attachmentBlobUrlMap.set(`attachments/${targetNode.name}`, dataUrl);
 					attachmentBlobUrlMap.set(`./attachments/${targetNode.name}`, dataUrl);
 					attachmentBlobUrlMap.set(targetNode.name, dataUrl);
+					attachmentBlobUrlMap.set(trimmed, dataUrl);
 					return dataUrl;
 				}
 			} else if (targetNode.content instanceof ArrayBuffer || (targetNode.content && targetNode.content.buffer instanceof ArrayBuffer)) {
@@ -1521,6 +1667,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					attachmentBlobUrlMap.set(`/attachments/${targetNode.name}`, existing);
 					attachmentBlobUrlMap.set(targetNode.name, existing);
 				}
+				attachmentBlobUrlMap.set(trimmed, existing);
 				return existing;
 			}
 		}
@@ -1611,6 +1758,46 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	async function saveImageToAttachments(fileOrDataUrl, preferredName = "") {
 		const { blob, ext, mimeType } = await imageToWebpBlob(fileOrDataUrl);
+		const folder = getOrCreateAttachmentsFolder();
+
+		// Content-hash deduplication: check if an identical image already exists in attachments
+		let incomingHash = "";
+		if (blob && blob.size > 0 && Array.isArray(folder.children)) {
+			incomingHash = await KeepLocalMarkdown.computeBlobHash(blob);
+			for (const child of folder.children) {
+				if (child.type === "file" && child.content) {
+					const childSize = child.content.size ?? child.content.byteLength ?? child.size ?? 0;
+					if (childSize === blob.size) {
+						let isMatch = false;
+						if (incomingHash && child._hash) {
+							isMatch = (incomingHash === child._hash);
+						} else if (incomingHash) {
+							child._hash = await KeepLocalMarkdown.computeBlobHash(child.content);
+							isMatch = (incomingHash === child._hash);
+						} else {
+							isMatch = await KeepLocalMarkdown.areBlobsEqual(child.content, blob);
+						}
+
+						if (isMatch) {
+							// Ensure blob URL is cached for this existing attachment
+							if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+								if (!attachmentBlobUrlMap.has(child.id) || !attachmentBlobUrlMap.has(`attachments/${child.name}`)) {
+									try {
+										const blobUrl = URL.createObjectURL(child.content instanceof Blob ? child.content : blob);
+										attachmentBlobUrlMap.set(child.id, blobUrl);
+										attachmentBlobUrlMap.set(`attachments/${child.name}`, blobUrl);
+										attachmentBlobUrlMap.set(`./attachments/${child.name}`, blobUrl);
+										attachmentBlobUrlMap.set(child.name, blobUrl);
+									} catch (_) { }
+								}
+							}
+							return `attachments/${child.name}`;
+						}
+					}
+				}
+			}
+		}
+
 		const now = new Date();
 		const pad = (n) => String(n).padStart(2, "0");
 		const dateStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
@@ -1619,7 +1806,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 		baseName = baseName.replace(/[/\\:*?"<>|]/g, "_").trim() || `image_${dateStr}`;
 		const filename = `${baseName}.${ext}`;
 
-		const folder = getOrCreateAttachmentsFolder();
 		const safeName = uniqueNodeName(folder.children, filename);
 
 		const fileNode = {
@@ -1630,7 +1816,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 			mimeType: mimeType || "image/webp",
 			content: blob,
 			size: blob.size,
-			_diskContent: null
+			_diskContent: null,
+			_hash: incomingHash || null
 		};
 
 		folder.children.push(fileNode);
@@ -1655,6 +1842,72 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 	if (typeof window !== "undefined") {
 		window.saveImageToAttachments = saveImageToAttachments;
+	}
+
+	async function fetchAndSaveImageAttachment(url, preferredName = "") {
+		if (!url || typeof url !== "string") return "";
+		const trimmed = url.trim();
+
+		// If it's a data URL, delegate directly to saveImageToAttachments
+		if (trimmed.startsWith("data:image/")) {
+			return await saveImageToAttachments(trimmed, preferredName);
+		}
+
+		// If it's already a relative attachments path or blob url
+		if (trimmed.startsWith("attachments/") || trimmed.startsWith("./attachments/") || trimmed.startsWith("blob:")) {
+			return trimmed;
+		}
+
+		// Check if it points to an attachments path (e.g. http://host:port/attachments/pic.webp)
+		const attMatch = trimmed.match(/\/attachments\/([^/?#]+)/i);
+		if (attMatch) {
+			const leaf = decodeURIComponent(attMatch[1]);
+			const attachmentsFolder = files.find(n => n.type === "folder" && n.name.toLowerCase() === "attachments");
+			const existing = attachmentsFolder?.children?.find(n => n.type === "file" && n.name.toLowerCase() === leaf.toLowerCase());
+			if (existing) {
+				return `attachments/${existing.name}`;
+			}
+		}
+
+		if (!/^https?:\/\//i.test(trimmed)) {
+			return trimmed;
+		}
+
+		// Attempt to fetch remote image and convert it to a local attachment
+		const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+		const timeoutId = controller ? setTimeout(() => controller.abort(), 6000) : null;
+		try {
+			const res = await fetch(trimmed, {
+				mode: "cors",
+				signal: controller?.signal
+			});
+			if (timeoutId) clearTimeout(timeoutId);
+			if (res.ok) {
+				const blob = await res.blob();
+				if (blob && blob.size > 0) {
+					const isImg = blob.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(trimmed);
+					if (isImg) {
+						if (!preferredName) {
+							try {
+								const u = new URL(trimmed);
+								const leaf = u.pathname.split("/").pop() || "";
+								if (leaf && /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(leaf)) {
+									preferredName = decodeURIComponent(leaf);
+								}
+							} catch (_) { }
+						}
+						return await saveImageToAttachments(blob, preferredName);
+					}
+				}
+			}
+		} catch (err) {
+			if (timeoutId) clearTimeout(timeoutId);
+			console.warn("[KeepLocal] fetchAndSaveImageAttachment could not fetch image, preserving URL:", trimmed, err);
+		}
+		return trimmed;
+	}
+	if (typeof window !== "undefined") {
+		window.fetchAndSaveImageAttachment = fetchAndSaveImageAttachment;
 	}
 
 	function loadImageInViewer(file) {
@@ -2000,31 +2253,69 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// FILESYSTEM SYNC
 	// ============================================================
+	function cloneFileNode(node) {
+		return KeepLocalMarkdown && typeof KeepLocalMarkdown.cloneFileNode === "function"
+			? KeepLocalMarkdown.cloneFileNode(node)
+			: (node ? { ...node, children: Array.isArray(node.children) ? node.children.map(cloneFileNode) : undefined } : null);
+	}
+
 	function mergeFileTrees(baseFolderFiles, localFiles) {
-		const merged = JSON.parse(JSON.stringify(baseFolderFiles));
+		if (KeepLocalMarkdown && typeof KeepLocalMarkdown.mergeFileTrees === "function") {
+			return KeepLocalMarkdown.mergeFileTrees(baseFolderFiles, localFiles, {
+				idGenerator: () => uid("file"),
+				nameExists: nameExistsInArray,
+				isImage: isImageFile
+			});
+		}
+
+		const merged = (baseFolderFiles || []).map(cloneFileNode);
 
 		function mergeNodes(targetArr, sourceNodes) {
-			for (const src of sourceNodes) {
+			for (const src of (sourceNodes || [])) {
+				if (!src) continue;
 				if (src.type === "file") {
-					const existing = targetArr.find(x => x.name.toLowerCase() === src.name.toLowerCase());
+					const existing = targetArr.find(x => x.type === "file" && x.name?.toLowerCase() === src.name?.toLowerCase());
 					if (!existing) {
-						targetArr.push(JSON.parse(JSON.stringify(src)));
-					} else if (existing.content !== src.content) {
-						const dot = src.name.lastIndexOf(".");
-						const baseName = dot > 0 ? src.name.slice(0, dot) : src.name;
-						const ext = dot > 0 ? src.name.slice(dot) : "";
-						let counter = 1;
-						let uniqueName = `${baseName} (local)${ext}`;
-						while (nameExistsInArray(targetArr, uniqueName)) {
-							counter++;
-							uniqueName = `${baseName} (local ${counter})${ext}`;
+						targetArr.push(cloneFileNode(src));
+					} else {
+						const isSrcImg = !!(src.isBinary || isImageFile(src.name));
+						const isExistingImg = !!(existing.isBinary || isImageFile(existing.name));
+
+						if (isSrcImg || isExistingImg) {
+							// Preserve valid binary attachment data; do not duplicate images into (local) copies
+							const hasExistingContent = existing.content && (typeof existing.content !== "object" || (typeof Blob !== "undefined" && existing.content instanceof Blob) || (typeof ArrayBuffer !== "undefined" && (existing.content instanceof ArrayBuffer || ArrayBuffer.isView(existing.content))));
+							const hasSrcContent = src.content && (typeof src.content !== "object" || (typeof Blob !== "undefined" && src.content instanceof Blob) || (typeof ArrayBuffer !== "undefined" && (src.content instanceof ArrayBuffer || ArrayBuffer.isView(src.content))));
+
+							if (!hasExistingContent && hasSrcContent) {
+								existing.content = src.content;
+								existing.isBinary = true;
+								if (src.mimeType) existing.mimeType = src.mimeType;
+								if (src.size) existing.size = src.size;
+							}
+						} else {
+							const existingContent = typeof existing.content === "string" ? existing.content : "";
+							const srcContent = typeof src.content === "string" ? src.content : "";
+							if (existingContent !== srcContent) {
+								const dot = src.name.lastIndexOf(".");
+								const baseName = dot > 0 ? src.name.slice(0, dot) : src.name;
+								const ext = dot > 0 ? src.name.slice(dot) : "";
+								let counter = 1;
+								let uniqueName = `${baseName} (local)${ext}`;
+								while (nameExistsInArray(targetArr, uniqueName)) {
+									counter++;
+									uniqueName = `${baseName} (local ${counter})${ext}`;
+								}
+								const copy = cloneFileNode(src);
+								copy.id = uid("file");
+								copy.name = uniqueName;
+								targetArr.push(copy);
+							}
 						}
-						targetArr.push({ ...JSON.parse(JSON.stringify(src)), id: uid("file"), name: uniqueName });
 					}
 				} else if (src.type === "folder") {
-					const existingFolder = targetArr.find(x => x.type === "folder" && x.name.toLowerCase() === src.name.toLowerCase());
+					const existingFolder = targetArr.find(x => x.type === "folder" && x.name?.toLowerCase() === src.name?.toLowerCase());
 					if (!existingFolder) {
-						targetArr.push(JSON.parse(JSON.stringify(src)));
+						targetArr.push(cloneFileNode(src));
 					} else {
 						existingFolder.children = existingFolder.children || [];
 						mergeNodes(existingFolder.children, src.children || []);
@@ -2033,7 +2324,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		}
 
-		mergeNodes(merged, localFiles);
+		mergeNodes(merged, localFiles || []);
 		return merged;
 	}
 
@@ -2050,30 +2341,75 @@ document.addEventListener("DOMContentLoaded", async () => {
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });
 
+			// Check if current workspace was already linked to this handle or matches stored IDB handle
+			let isSameAsCurrentWs = false;
+			if (workspaceHandle && typeof handle.isSameEntry === "function") {
+				try {
+					isSameAsCurrentWs = await handle.isSameEntry(workspaceHandle);
+				} catch (_) { }
+			}
+			if (!isSameAsCurrentWs && activeWsId) {
+				try {
+					const storedActiveHandle = await idbGet(`handle_${activeWsId}`);
+					if (storedActiveHandle && typeof handle.isSameEntry === "function") {
+						isSameAsCurrentWs = await handle.isSameEntry(storedActiveHandle);
+					}
+				} catch (_) { }
+			}
+
+			if (isSameAsCurrentWs) {
+				workspaceHandle = handle;
+				fsPermissionGranted = true;
+				await idbSet(`handle_${activeWsId}`, handle);
+				updateFolderUI();
+				await flushDiskSync();
+				await resyncFromDisk();
+				return;
+			}
+
 			// Check if another workspace is already linked to this exact folder handle
 			const otherWs = await findWorkspaceByHandle(handle);
 			if (otherWs && otherWs.id !== activeWsId) {
-				const proceed = await new Promise(res => {
+				const activeWsObj = workspaces.find(w => w.id === activeWsId);
+				const currentWsName = activeWsObj?.name || "Current Workspace";
+				const userChoice = await new Promise(res => {
 					showChoiceModal({
-						title: "Folder Already Connected",
-						message: `The folder "${handle.name}" is already linked to another workspace ("${otherWs.name}"). Connecting it here will share this folder across both workspaces. Do you want to proceed?`,
+						title: "Folder Already Linked to Another Workspace",
+						message: `The folder "${handle.name}" is already linked to "${otherWs.name}". A folder should belong to only one workspace to avoid sync collisions and out-of-date caches. What would you like to do?`,
 						choices: [
 							{
-								label: "Connect Anyway",
-								description: "Share this folder with both workspaces.",
-								action: "connect",
+								label: `Switch to "${otherWs.name}"`,
+								description: `Open the workspace that already owns this folder.`,
+								action: "switch",
 								primary: true
 							},
 							{
+								label: `Transfer Folder to "${currentWsName}"`,
+								description: `Unlink "${otherWs.name}" and make "${currentWsName}" the sole workspace for this folder.`,
+								action: "transfer"
+							},
+							{
 								label: "Cancel",
-								description: "Do not connect this folder.",
+								description: "Keep current workspace settings without changing folder.",
 								action: "cancel"
 							}
 						],
-						onSelect: action => res(action === "connect")
+						onSelect: action => res(action)
 					});
 				});
-				if (!proceed) return;
+
+				if (userChoice === "switch") {
+					await openWorkspace(otherWs.id);
+					return;
+				}
+				if (userChoice === "transfer") {
+					// Unlink from otherWs so only activeWsId owns this folder
+					otherWs.folderName = null;
+					await idbDel(`handle_${otherWs.id}`);
+					saveWorkspaceMeta();
+				} else {
+					return;
+				}
 			}
 
 			const readFiles = await readDirectoryHandle(handle);
@@ -2268,7 +2604,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 	async function writeFile(dirHandle, name, content) {
 		const fh = await dirHandle.getFileHandle(name, { create: true });
 		const w = await fh.createWritable();
-		await w.write(content);
+		if (content && typeof content === "object" && !(content instanceof Blob) && !(content instanceof ArrayBuffer) && !ArrayBuffer.isView(content)) {
+			console.warn("[KeepLocal] Refusing to write invalid plain object to file:", name);
+			await w.close();
+			return;
+		}
+		await w.write(content ?? "");
 		await w.close();
 	}
 
@@ -2276,12 +2617,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 		for (const n of nodes) {
 			if (n.type === "file") {
 				if (n._diskContent !== n.content) {
-					await writeFile(dirHandle, n.name, n.content || "");
-					n._diskContent = n.content || "";
+					try {
+						let contentToWrite = n.content;
+						if (contentToWrite && typeof contentToWrite === "object" && !(contentToWrite instanceof Blob) && !(contentToWrite instanceof ArrayBuffer) && !ArrayBuffer.isView(contentToWrite)) {
+							console.warn("[KeepLocal] Skipping write of invalid object content for:", n.name);
+							continue;
+						}
+						await writeFile(dirHandle, n.name, contentToWrite ?? "");
+						n._diskContent = n.content;
+					} catch (writeErr) {
+						if (writeErr.name === "NotAllowedError") throw writeErr;
+						console.warn("[KeepLocal] Error writing file to disk:", n.name, writeErr);
+					}
 				}
 			} else {
-				const sub = await dirHandle.getDirectoryHandle(n.name, { create: true });
-				await saveNodes(sub, n.children || []);
+				try {
+					const sub = await dirHandle.getDirectoryHandle(n.name, { create: true });
+					await saveNodes(sub, n.children || []);
+				} catch (dirErr) {
+					if (dirErr.name === "NotAllowedError") throw dirErr;
+					console.warn("[KeepLocal] Error writing directory to disk:", n.name, dirErr);
+				}
 			}
 		}
 	}
@@ -2375,6 +2731,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 				updateFolderUI();
 			} else {
 				console.warn("Sync error:", e);
+				if (wsStatusBadge && workspaceHandle) {
+					wsStatusBadge.textContent = workspaceHandle.name;
+				}
 			}
 		} finally {
 			isSyncing = false;
@@ -2433,9 +2792,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			selectedId = nf.id;
 			persistCurrent();
 			render();
-			setTimeout(() => beginInlineRename(nf.id), 40);
 			await loadFile();
 			syncWorkspace();
+			setTimeout(() => beginInlineRename(nf.id), 60);
 		} finally {
 			isAddingFile = false;
 		}
@@ -3390,6 +3749,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 								const relPath = await saveImageToAttachments(src);
 								this._originalUrl = relPath;
 								this.data = { url: relPath };
+							} else if (/^https?:\/\//i.test(src)) {
+								const relPath = await fetchAndSaveImageAttachment(src);
+								this._originalUrl = relPath;
+								this.data = { url: relPath };
 							} else if (src) {
 								this._originalUrl = src;
 								this.data = { url: src };
@@ -3398,7 +3761,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 						}
 						case "pattern": {
 							const url = e.detail?.data || "";
-							if (url) {
+							if (/^https?:\/\//i.test(url)) {
+								const relPath = await fetchAndSaveImageAttachment(url);
+								this._originalUrl = relPath;
+								this.data = { url: relPath };
+							} else if (url) {
 								this._originalUrl = url;
 								this.data = { url };
 							}
@@ -3428,6 +3795,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 							}
 						}
 					}
+					if (url && /^https?:\/\//i.test(url)) {
+						const attMatch = url.match(/\/attachments\/([^/?#]+)/i);
+						if (attMatch) {
+							const leaf = decodeURIComponent(attMatch[1]);
+							const attachmentsFolder = files.find(n => n.type === "folder" && n.name.toLowerCase() === "attachments");
+							if (attachmentsFolder?.children?.some(c => c.name.toLowerCase() === leaf.toLowerCase())) {
+								url = `attachments/${leaf}`;
+							}
+						}
+					}
 					return {
 						url,
 						caption: captionEl ? captionEl.innerHTML : (this.data?.caption || ""),
@@ -3443,15 +3820,77 @@ document.addEventListener("DOMContentLoaded", async () => {
 							const cls = this.CSS.imageHolder + "--" + tune.name.replace(/([A-Z])/g, t => `-${t[0].toLowerCase()}`);
 							this.nodes.imageHolder.classList.toggle(cls, !!this.data[tune.name]);
 						}
-						if (tune.name === "stretched") {
-							const block = (typeof this.api?.blocks?.getBlockByIndex === "function")
-								? (this.api.blocks.getBlockByIndex(this.blockIndex) || this.api.blocks.getBlockByIndex(this.api.blocks.getCurrentBlockIndex()))
-								: null;
-							if (block && typeof block.stretched !== "undefined") {
-								block.stretched = !!this.data.stretched;
+						if (tune.name === "stretched" && typeof this.api?.blocks?.getBlockByIndex === "function") {
+							try {
+								const totalBlocks = typeof this.api.blocks.getBlocksCount === "function" ? this.api.blocks.getBlocksCount() : 0;
+								let block = null;
+								if (typeof this.blockIndex === "number" && this.blockIndex >= 0 && this.blockIndex < totalBlocks) {
+									block = this.api.blocks.getBlockByIndex(this.blockIndex);
+								} else if (typeof this.api.blocks.getCurrentBlockIndex === "function") {
+									const curIdx = this.api.blocks.getCurrentBlockIndex();
+									if (curIdx >= 0 && curIdx < totalBlocks) {
+										block = this.api.blocks.getBlockByIndex(curIdx);
+									}
+								}
+								if (block && typeof block.stretched !== "undefined") {
+									block.stretched = !!this.data.stretched;
+								}
+							} catch (_) { }
+						}
+					});
+				}
+				_showUrlInput(container) {
+					if (!container) return;
+					const existingInput = container.querySelector(".ce-image-url-input");
+					if (existingInput) return;
+
+					const urlInput = document.createElement("input");
+					urlInput.className = "cdx-input ce-image-url-input";
+					urlInput.placeholder = "Paste image URL or image file and press Enter…";
+					urlInput.style.cssText = "margin-bottom: 8px;";
+					urlInput.addEventListener("keydown", async (e) => {
+						if (e.key === "Enter") {
+							e.preventDefault();
+							const val = urlInput.value.trim();
+							if (val) {
+								let finalUrl = val;
+								if (val.startsWith("data:image/")) {
+									finalUrl = await saveImageToAttachments(val);
+								} else if (/^https?:\/\//i.test(val)) {
+									finalUrl = await fetchAndSaveImageAttachment(val);
+								}
+								this._originalUrl = finalUrl;
+								urlInput.remove();
+								this.data = { url: finalUrl, caption: this.data?.caption || "" };
+								if (typeof autoSaveCurrentFile === "function") {
+									await autoSaveCurrentFile();
+								}
 							}
 						}
 					});
+					urlInput.addEventListener("paste", async (e) => {
+						const items = e.clipboardData?.items;
+						if (!items) return;
+						for (let i = 0; i < items.length; i++) {
+							if (items[i].type && items[i].type.startsWith("image/")) {
+								const file = items[i].getAsFile();
+								if (file) {
+									e.preventDefault();
+									e.stopPropagation();
+									const relPath = await saveImageToAttachments(file);
+									this._originalUrl = relPath;
+									this._cleanWrapperInputs();
+									this.data = { url: relPath, caption: file.name || "image" };
+									if (typeof autoSaveCurrentFile === "function") {
+										await autoSaveCurrentFile();
+									}
+									return;
+								}
+							}
+						}
+					});
+					container.prepend(urlInput);
+					setTimeout(() => urlInput.focus(), 50);
 				}
 				render() {
 					const origUrl = this._originalUrl || this.data?.url || "";
@@ -3472,15 +3911,73 @@ document.addEventListener("DOMContentLoaded", async () => {
 							if (loader) loader.remove();
 							container.classList.remove(this.CSS.loading);
 
+							// Attempt auto-healing from local attachments if filename matches
+							const rawUrl = this._originalUrl || "";
+							try {
+								const leaf = (rawUrl.split("/").pop() || "").split("?")[0].split("#")[0];
+								if (leaf && isImageFile(leaf)) {
+									const decLeaf = decodeURIComponent(leaf);
+									const resolved = resolveAttachmentUrl(decLeaf);
+									if (resolved && resolved !== imgEl.src) {
+										this._originalUrl = `attachments/${decLeaf}`;
+										this.data = { ...this.data, url: `attachments/${decLeaf}` };
+										imgEl.src = resolved;
+										return;
+									}
+								}
+							} catch (_) { }
+
 							if (!container.querySelector(".ce-image-error-box")) {
 								const errorBox = document.createElement("div");
 								errorBox.className = "ce-image-error-box";
-								errorBox.style.cssText = "display:flex; align-items:center; gap:8px; padding:10px 14px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:var(--text-danger, #ef4444); font-size:12px; margin:8px 0;";
+								errorBox.style.cssText = "display:flex; align-items:center; gap:8px; padding:10px 14px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:var(--text-danger, #ef4444); font-size:12px; margin:8px 0; flex-wrap:wrap;";
 								const displayUrl = (this._originalUrl || "").length > 60 ? ((this._originalUrl || "").slice(0, 60) + "…") : (this._originalUrl || "image");
 								errorBox.innerHTML = `
-									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="14" y2="16"/></svg>
-									<span>Unable to load image: <code style="font-size:11px; word-break:break-all;">${escHtml(displayUrl)}</code></span>
+									<div style="display:flex; align-items:center; gap:8px; flex:1; min-width:200px;">
+										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="14" y2="16"/></svg>
+										<span>Unable to load image: <code style="font-size:11px; word-break:break-all;">${escHtml(displayUrl)}</code></span>
+									</div>
 								`;
+
+								const btnGroup = document.createElement("div");
+								btnGroup.style.cssText = "display:flex; align-items:center; gap:6px; margin-left:auto;";
+
+								const replaceBtn = document.createElement("button");
+								replaceBtn.type = "button";
+								replaceBtn.className = "ce-image-replace-btn";
+								replaceBtn.textContent = "Replace Image…";
+								replaceBtn.style.cssText = "padding:4px 10px; font-size:11px; font-weight:500; background:var(--bg-secondary, #2a2d37); border:1px solid var(--border-color, #444); border-radius:4px; color:var(--text-primary, #fff); cursor:pointer; white-space:nowrap;";
+								replaceBtn.addEventListener("click", () => {
+									const fileInput = document.createElement("input");
+									fileInput.type = "file";
+									fileInput.accept = "image/*";
+									fileInput.onchange = async () => {
+										const file = fileInput.files?.[0];
+										if (!file) return;
+										const relPath = await saveImageToAttachments(file);
+										this._originalUrl = relPath;
+										this._cleanWrapperInputs();
+										this.data = { url: relPath, caption: this.data?.caption || file.name || "image" };
+										if (typeof autoSaveCurrentFile === "function") {
+											await autoSaveCurrentFile();
+										}
+									};
+									fileInput.click();
+								});
+								btnGroup.appendChild(replaceBtn);
+
+								const editUrlBtn = document.createElement("button");
+								editUrlBtn.type = "button";
+								editUrlBtn.className = "ce-image-edit-url-btn";
+								editUrlBtn.textContent = "Edit URL";
+								editUrlBtn.style.cssText = "padding:4px 8px; font-size:11px; background:transparent; border:1px solid var(--border-color, #444); border-radius:4px; color:var(--text-secondary, #aaa); cursor:pointer; white-space:nowrap;";
+								editUrlBtn.addEventListener("click", () => {
+									errorBox.remove();
+									this._showUrlInput(container);
+								});
+								btnGroup.appendChild(editUrlBtn);
+
+								errorBox.appendChild(btnGroup);
 								container.appendChild(errorBox);
 							}
 							if (this.nodes.caption && !container.contains(this.nodes.caption)) {
@@ -3510,44 +4007,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					attachErrorHandler();
 
 					if (!origUrl) {
-						const urlInput = document.createElement("input");
-						urlInput.className = "cdx-input ce-image-url-input";
-						urlInput.placeholder = "Paste image URL or image file and press Enter…";
-						urlInput.style.cssText = "margin-bottom: 8px;";
-						urlInput.addEventListener("keydown", async (e) => {
-							if (e.key === "Enter") {
-								e.preventDefault();
-								const val = urlInput.value.trim();
-								if (val) {
-									let finalUrl = val;
-									if (val.startsWith("data:image/")) {
-										finalUrl = await saveImageToAttachments(val);
-									}
-									this._originalUrl = finalUrl;
-									urlInput.remove();
-									this.data = { url: finalUrl, caption: this.data.caption || "" };
-								}
-							}
-						});
-						urlInput.addEventListener("paste", async (e) => {
-							const items = e.clipboardData?.items;
-							if (!items) return;
-							for (let i = 0; i < items.length; i++) {
-								if (items[i].type && items[i].type.startsWith("image/")) {
-									const file = items[i].getAsFile();
-									if (file) {
-										e.preventDefault();
-										e.stopPropagation();
-										const relPath = await saveImageToAttachments(file);
-										this._originalUrl = relPath;
-										this._cleanWrapperInputs();
-										this.data = { url: relPath, caption: file.name || "image" };
-										return;
-									}
-								}
-							}
-						});
-						container.prepend(urlInput);
+						this._showUrlInput(container);
 					}
 					return container;
 				}
@@ -3760,79 +4220,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 		window.__getSelectedId = () => selectedId;
 		window.__setEditorMode = (m) => { editorMode = m; };
 	}
-
-	// function updateCodeHighlighting() {
-	// 	const codeEl = document.getElementById("codeHighlightContent");
-	// 	const preEl = document.getElementById("codeHighlightPre");
-
-	// 	if (!codeEl || !editorTextarea || !preEl) return;
-
-	// 	const file = findNode(files, selectedId);
-	// 	const ext = file?.name
-	// 		? file.name.split(".").pop().toLowerCase()
-	// 		: "";
-
-	// 	const langMap = {
-	// 		js: "javascript",
-	// 		jsx: "jsx",
-	// 		ts: "typescript",
-	// 		tsx: "tsx",
-	// 		html: "html",
-	// 		css: "css",
-	// 		json: "json",
-	// 		py: "python",
-	// 		sh: "bash",
-	// 		bash: "bash",
-	// 		go: "go",
-	// 		rs: "rust",
-	// 		java: "java",
-	// 		c: "c",
-	// 		cpp: "cpp",
-	// 		h: "c",
-	// 		sql: "sql",
-	// 		yaml: "yaml",
-	// 		yml: "yaml",
-	// 		xml: "markup",
-	// 		md: "markdown",
-	// 		markdown: "markdown"
-	// 	};
-
-	// 	const lang = langMap[ext] || "clike";
-
-	// 	codeEl.className = `language-${lang}`;
-
-	// 	let val = editorTextarea.value || "";
-
-	// 	if (val.endsWith("\n")) {
-	// 		val += " ";
-	// 	}
-
-	// 	codeEl.textContent = val;
-
-	// 	// Keep both rendering layers identical
-	// 	const computed = getComputedStyle(editorTextarea);
-
-	// 	preEl.style.fontFamily = computed.fontFamily;
-	// 	preEl.style.fontSize = computed.fontSize;
-	// 	preEl.style.lineHeight = computed.lineHeight;
-	// 	preEl.style.letterSpacing = computed.letterSpacing;
-
-	// 	codeEl.style.fontFamily = computed.fontFamily;
-	// 	codeEl.style.fontSize = computed.fontSize;
-	// 	codeEl.style.lineHeight = computed.lineHeight;
-	// 	codeEl.style.letterSpacing = computed.letterSpacing;
-
-
-	// 	if (lineNumbersEl) {
-	// 		lineNumbersEl.style.lineHeight = computed.lineHeight;
-	// 	}
-
-	// 	if (typeof Prism !== "undefined") {
-	// 		try {
-	// 			Prism.highlightElement(codeEl);
-	// 		} catch (_) { }
-	// 	}
-	// }
 
 	// Sync overlay scroll
 	function updateCodeHighlighting() {
@@ -4072,6 +4459,32 @@ document.addEventListener("DOMContentLoaded", async () => {
 					e.preventDefault();
 					const relPath = await saveImageToAttachments(file);
 					const mdLink = `![image](${relPath})\n`;
+					const start = editorTextarea.selectionStart;
+					const end = editorTextarea.selectionEnd;
+					const val = editorTextarea.value;
+					editorTextarea.value = val.substring(0, start) + mdLink + val.substring(end);
+					editorTextarea.selectionStart = editorTextarea.selectionEnd = start + mdLink.length;
+					editorTextarea.dispatchEvent(new Event("input"));
+					return;
+				}
+			}
+		}
+	});
+
+	editorTextarea.addEventListener("dragover", (e) => {
+		if (e.dataTransfer?.types?.includes("Files")) {
+			e.preventDefault();
+		}
+	});
+
+	editorTextarea.addEventListener("drop", async (e) => {
+		const transferFiles = e.dataTransfer?.files;
+		if (transferFiles && transferFiles.length > 0) {
+			for (let i = 0; i < transferFiles.length; i++) {
+				if (transferFiles[i].type && transferFiles[i].type.startsWith("image/")) {
+					e.preventDefault();
+					const relPath = await saveImageToAttachments(transferFiles[i]);
+					const mdLink = `![${transferFiles[i].name || "image"}](${relPath})\n`;
 					const start = editorTextarea.selectionStart;
 					const end = editorTextarea.selectionEnd;
 					const val = editorTextarea.value;
