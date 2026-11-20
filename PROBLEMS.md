@@ -672,7 +672,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Pasted images become broken when viewed offline, across network boundaries, or after temporary servers shut down.
   - **How to Fix:** In `CustomImageTool.onPaste()`, attempt to fetch and convert external image URLs (or clipboard image blob entries) into local attachments via `saveImageToAttachments()`.
 
-- [ ] **AUDIT-19: Redundant Conflict Prompt and Destructive Merge when Selecting Current Folder**
+- [x] **AUDIT-19: Redundant Conflict Prompt and Destructive Merge when Selecting Current Folder** (FIXED)
   - **Severity:** Medium (UX Disruption & Accidental Data Corruption)
   - **Location:** [`js/script.js#L2053-L2103`](file:///home/raja/Workspace/keepLocal/js/script.js#L2053-L2103) (`saveWorkspace`)
   - **Problem Description:** When a user clicks "Change Folder" and selects the directory that the current workspace is already connected to, `saveWorkspace()` fails to check `await handle.isSameEntry(workspaceHandle)`. Because `localFileCount > 0 && folderFileCount > 0`, it displays the "Existing Files Detected" conflict dialog and prompts the user to merge or replace, inadvertently triggering the buggy merge flow on identical directories.

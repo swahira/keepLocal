@@ -2088,6 +2088,32 @@ document.addEventListener("DOMContentLoaded", async () => {
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });
 
+			// Check if current workspace was already linked to this handle or matches stored IDB handle
+			let isSameAsCurrentWs = false;
+			if (workspaceHandle && typeof handle.isSameEntry === "function") {
+				try {
+					isSameAsCurrentWs = await handle.isSameEntry(workspaceHandle);
+				} catch (_) { }
+			}
+			if (!isSameAsCurrentWs && activeWsId) {
+				try {
+					const storedActiveHandle = await idbGet(`handle_${activeWsId}`);
+					if (storedActiveHandle && typeof handle.isSameEntry === "function") {
+						isSameAsCurrentWs = await handle.isSameEntry(storedActiveHandle);
+					}
+				} catch (_) { }
+			}
+
+			if (isSameAsCurrentWs) {
+				workspaceHandle = handle;
+				fsPermissionGranted = true;
+				await idbSet(`handle_${activeWsId}`, handle);
+				updateFolderUI();
+				await flushDiskSync();
+				await resyncFromDisk();
+				return;
+			}
+
 			// Check if another workspace is already linked to this exact folder handle
 			const otherWs = await findWorkspaceByHandle(handle);
 			if (otherWs && otherWs.id !== activeWsId) {
