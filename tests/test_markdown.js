@@ -126,6 +126,34 @@ const tableNoHeaderMd = KeepLocalMarkdown.blocksToText({
 });
 assert.ok(!tableNoHeaderMd.includes("| --- | --- |"));
 
+// AUDIT-21: Escaped pipes and code spans in tables
+const complexTableMd = "| Syntax | Code | Explanation |\n| --- | --- | --- |\n| a \\| b | `x | y` | Bitwise OR |\n| Line 1<br>Line 2 | `foo` | Multiline cell |";
+const complexBlocks = KeepLocalMarkdown.textToBlocks(complexTableMd);
+assert.strictEqual(complexBlocks[0].type, "table");
+assert.strictEqual(complexBlocks[0].data.content.length, 3);
+assert.strictEqual(complexBlocks[0].data.content[0].length, 3);
+assert.strictEqual(complexBlocks[0].data.content[1].length, 3, "Escaped pipe and code pipe must not split into extra columns");
+assert.strictEqual(complexBlocks[0].data.content[1][0], "a | b");
+assert.strictEqual(complexBlocks[0].data.content[1][1], "<code>x | y</code>");
+assert.strictEqual(complexBlocks[0].data.content[2][0], "Line 1<br>Line 2");
+
+const complexRoundtrip = KeepLocalMarkdown.blocksToText({ blocks: complexBlocks });
+assert.ok(complexRoundtrip.includes("a \\| b"), "Escaped pipe must be serialized as \\|");
+assert.ok(complexRoundtrip.includes("`x | y`"), "Code span with pipe must not be broken");
+assert.ok(complexRoundtrip.includes("Line 1<br>Line 2"), "<br> in cell must not create a literal newline");
+
+// AUDIT-21: Jagged table rows padding
+const jaggedBlocks = KeepLocalMarkdown.textToBlocks("| Col 1 | Col 2 | Col 3 |\n| --- | --- | --- |\n| Only One |");
+assert.strictEqual(jaggedBlocks[0].data.content[1].length, 3, "Short row must be padded with empty strings to match maxCols");
+assert.strictEqual(jaggedBlocks[0].data.content[1][1], "");
+assert.strictEqual(jaggedBlocks[0].data.content[1][2], "");
+
+// AUDIT-21: splitTableRow and formatTableCellForMd direct unit tests
+assert.deepStrictEqual(KeepLocalMarkdown.splitTableRow("| a \\| b | `c | d` | e |"), ["a \\| b", "`c | d`", "e"]);
+assert.strictEqual(KeepLocalMarkdown.formatTableCellForMd("a | b"), "a \\| b");
+assert.strictEqual(KeepLocalMarkdown.formatTableCellForMd("`x | y`"), "`x | y`");
+assert.strictEqual(KeepLocalMarkdown.formatTableCellForMd("line 1<br>line 2"), "line 1<br>line 2");
+
 console.log("✓ textToBlocks tests passed");
 
 // 7. blocksToText roundtrip

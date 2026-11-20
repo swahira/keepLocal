@@ -330,6 +330,150 @@
 			.replace(/%%%U_OPEN%%%/g, "<u>").replace(/%%%U_CLOSE%%%/g, "</u>");
 	}
 
+	function splitTableRow(rowStr) {
+		if (!rowStr) return [];
+		let str = rowStr.trim();
+		if (str.startsWith("|")) str = str.slice(1);
+		if (str.endsWith("|") && !str.endsWith("\\|")) str = str.slice(0, -1);
+
+		const cells = [];
+		let current = "";
+		let inBacktick = false;
+		let backtickCount = 0;
+		let i = 0;
+
+		while (i < str.length) {
+			const char = str[i];
+			if (char === "\\") {
+				if (i + 1 < str.length && str[i + 1] === "|") {
+					current += "\\|";
+					i += 2;
+					continue;
+				}
+				current += char;
+				i++;
+				continue;
+			}
+			if (char === "`") {
+				let count = 0;
+				while (i < str.length && str[i] === "`") {
+					count++;
+					current += "`";
+					i++;
+				}
+				if (!inBacktick) {
+					inBacktick = true;
+					backtickCount = count;
+				} else if (backtickCount === count) {
+					inBacktick = false;
+					backtickCount = 0;
+				}
+				continue;
+			}
+			if (char === "|" && !inBacktick) {
+				cells.push(current.trim());
+				current = "";
+				i++;
+				continue;
+			}
+			current += char;
+			i++;
+		}
+		cells.push(current.trim());
+		return cells;
+	}
+
+	function unescapeCellPipes(cellStr) {
+		if (!cellStr) return "";
+		let res = "";
+		let inBacktick = false;
+		let backtickCount = 0;
+		let i = 0;
+		while (i < cellStr.length) {
+			if (cellStr[i] === "\\") {
+				if (i + 1 < cellStr.length && cellStr[i + 1] === "|") {
+					res += "|";
+					i += 2;
+					continue;
+				}
+				res += cellStr[i];
+				i++;
+				continue;
+			}
+			if (cellStr[i] === "`") {
+				let count = 0;
+				while (i < cellStr.length && cellStr[i] === "`") {
+					count++;
+					res += "`";
+					i++;
+				}
+				if (!inBacktick) {
+					inBacktick = true;
+					backtickCount = count;
+				} else if (backtickCount === count) {
+					inBacktick = false;
+					backtickCount = 0;
+				}
+				continue;
+			}
+			res += cellStr[i];
+			i++;
+		}
+		return res;
+	}
+
+	function formatTableCellForMd(html) {
+		if (!html) return "";
+		let text = html.replace(/<br\s*\/?>/gi, "%%%BR_TOKEN%%%");
+		let converted = h2md(text);
+		converted = converted.replace(/%%%BR_TOKEN%%%/g, "<br>");
+		let res = "";
+		let inBacktick = false;
+		let backtickCount = 0;
+		let i = 0;
+		while (i < converted.length) {
+			if (converted[i] === "\\") {
+				if (i + 1 < converted.length && converted[i + 1] === "|") {
+					res += "\\|";
+					i += 2;
+					continue;
+				}
+				res += converted[i];
+				i++;
+				continue;
+			}
+			if (converted[i] === "`") {
+				let count = 0;
+				while (i < converted.length && converted[i] === "`") {
+					count++;
+					res += "`";
+					i++;
+				}
+				if (!inBacktick) {
+					inBacktick = true;
+					backtickCount = count;
+				} else if (backtickCount === count) {
+					inBacktick = false;
+					backtickCount = 0;
+				}
+				continue;
+			}
+			if (converted[i] === "|" && !inBacktick) {
+				res += "\\|";
+				i++;
+				continue;
+			}
+			if (converted[i] === "\n") {
+				res += "<br>";
+				i++;
+				continue;
+			}
+			res += converted[i];
+			i++;
+		}
+		return res;
+	}
+
 	function serializeBlockLines(b) {
 		const lines = [];
 		switch (b.type) {
@@ -407,7 +551,7 @@
 				const content = b.data?.content || [];
 				if (content.length) {
 					content.forEach((row, idx) => {
-						lines.push("| " + row.map(c => h2md(c)).join(" | ") + " |");
+						lines.push("| " + row.map(c => formatTableCellForMd(c)).join(" | ") + " |");
 						if (idx === 0 && b.data?.withHeadings !== false) {
 							lines.push("| " + row.map(() => "---").join(" | ") + " |");
 						}
@@ -449,11 +593,22 @@
 
 		const flushTable = () => {
 			if (!tableBuf.length) return;
-			const hasHeaderSep = tableBuf.length > 1 && tableBuf[1].split("|").slice(1, -1).every(c => /^:?-+:?$/.test(c.trim()));
+			const hasHeaderSep = tableBuf.length > 1 && splitTableRow(tableBuf[1]).every(c => /^:?-+:?$/.test(c.trim()));
 			const content = tableBuf
-				.map(r => r.split("|").slice(1, -1).map(c => c.trim()))
-				.filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c)));
+				.map(r => splitTableRow(r).map(c => {
+					const unescaped = unescapeCellPipes(c);
+					let html = md2h(unescaped);
+					html = html.replace(/&lt;br\s*\/?&gt;/gi, "<br>");
+					return html;
+				}))
+				.filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c.trim())));
 			if (content.length) {
+				const maxCols = Math.max(...content.map(r => r.length), 0);
+				if (maxCols > 0) {
+					content.forEach(r => {
+						while (r.length < maxCols) r.push("");
+					});
+				}
 				blocks.push({ type: "table", data: { content, withHeadings: hasHeaderSep, tight: tableTight } });
 			}
 			tableBuf = [];
@@ -842,7 +997,10 @@
 		textToBlocks,
 		blocksToText,
 		serializeBlockLines,
-		resolveSafeZipPath
+		resolveSafeZipPath,
+		splitTableRow,
+		unescapeCellPipes,
+		formatTableCellForMd
 	};
 
 	global.KeepLocalMarkdown = KeepLocalMarkdown;
