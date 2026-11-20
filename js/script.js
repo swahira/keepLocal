@@ -722,14 +722,94 @@ document.addEventListener("DOMContentLoaded", async () => {
 		try {
 			const handle = await window.showDirectoryPicker({ mode: "readwrite" });
 
-			// Check if a workspace already exists for this exact folder on disk
-			const matchedWs = await findWorkspaceByHandle(handle);
-			if (matchedWs) {
-				// Reconnect the handle and open it
+			// Check if workspaces already exist for this exact folder on disk
+			const matchingWorkspaces = [];
+			for (const w of workspaces) {
+				if (w.folderName) {
+					try {
+						const storedHandle = await idbGet(`handle_${w.id}`);
+						if (storedHandle && typeof handle.isSameEntry === "function") {
+							if (await handle.isSameEntry(storedHandle)) {
+								matchingWorkspaces.push(w);
+							}
+						}
+					} catch (_) { }
+				}
+			}
+
+			if (matchingWorkspaces.length > 0) {
+				let matchedWs = matchingWorkspaces[0];
+
+				if (matchingWorkspaces.length > 1) {
+					const choiceAction = await new Promise(res => {
+						showChoiceModal({
+							title: "Folder Linked to Multiple Workspaces",
+							message: `The folder "${handle.name}" is currently linked to ${matchingWorkspaces.length} workspaces: ${matchingWorkspaces.map(w => `"${w.name}"`).join(" and ")}. Which workspace would you like to open?`,
+							choices: [
+								...matchingWorkspaces.map((w, idx) => ({
+									label: `Open "${w.name}"`,
+									description: `Open workspace "${w.name}" with this folder.`,
+									action: `open_${w.id}`,
+									primary: idx === 0
+								})),
+								{
+									label: `Consolidate to "${matchingWorkspaces[0].name}"`,
+									description: `Unlink other duplicate workspaces and keep only "${matchingWorkspaces[0].name}".`,
+									action: "consolidate"
+								},
+								{
+									label: "Cancel",
+									description: "Do not open this folder.",
+									action: "cancel"
+								}
+							],
+							onSelect: act => res(act)
+						});
+					});
+
+					if (!choiceAction || choiceAction === "cancel") return;
+
+					if (choiceAction === "consolidate") {
+						matchedWs = matchingWorkspaces[0];
+						for (let i = 1; i < matchingWorkspaces.length; i++) {
+							const dup = matchingWorkspaces[i];
+							dup.folderName = null;
+							await idbDel(`handle_${dup.id}`);
+						}
+						saveWorkspaceMeta();
+					} else if (choiceAction.startsWith("open_")) {
+						const chosenId = choiceAction.replace("open_", "");
+						matchedWs = matchingWorkspaces.find(w => w.id === chosenId) || matchingWorkspaces[0];
+					}
+				}
+
+				// Reconnect the handle and read current disk state
 				workspaceHandle = handle;
 				fsPermissionGranted = true;
 				await idbSet(`handle_${matchedWs.id}`, handle);
-				await openWorkspace(matchedWs.id);
+
+				// Retrieve any existing in-memory / IDB files for this workspace
+				let currentFiles = [];
+				try {
+					currentFiles = await KeepLocalDB.getFiles(matchedWs.id);
+				} catch (_) { }
+
+				// Read physical directory from disk, preserving existing node IDs and open states
+				const diskFiles = await readDirectoryHandle(handle, currentFiles);
+
+				// Reconcile disk files with any unsaved/unsynced local files
+				let mergedFiles = diskFiles;
+				if (currentFiles && currentFiles.length > 0) {
+					mergedFiles = mergeFileTrees(diskFiles, currentFiles);
+				}
+
+				files = mergedFiles;
+				matchedWs.fileCount = countAllFiles(files);
+				matchedWs.folderName = handle.name;
+				saveWorkspaceMeta();
+				saveWsFiles(matchedWs.id);
+
+				await openWorkspace(matchedWs.id, true /* skip file load, already freshly read & merged from disk */);
 				return;
 			}
 
@@ -764,9 +844,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 								workspaceHandle = handle;
 								fsPermissionGranted = true;
 								await idbSet(`handle_${orphanedWs.id}`, handle);
-								const readFiles = await readDirectoryHandle(handle);
-								files = readFiles;
+
+								let currentFiles = [];
+								try {
+									currentFiles = await KeepLocalDB.getFiles(orphanedWs.id);
+								} catch (_) { }
+
+								const readFiles = await readDirectoryHandle(handle, currentFiles);
+								let mergedFiles = readFiles;
+								if (currentFiles && currentFiles.length > 0) {
+									mergedFiles = mergeFileTrees(readFiles, currentFiles);
+								}
+
+								files = mergedFiles;
 								orphanedWs.fileCount = countAllFiles(files);
+								orphanedWs.folderName = handle.name;
 								saveWorkspaceMeta();
 								saveWsFiles(orphanedWs.id);
 								await openWorkspace(orphanedWs.id, true);
@@ -982,6 +1074,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 						fsPermissionGranted = (perm === "granted");
 					}
 				} catch (e) { console.warn("Could not restore handle:", e); }
+			}
+
+			// If workspace is linked to a directory with granted permission but in-memory files are empty, auto-populate from disk
+			if (workspaceHandle && fsPermissionGranted && (!files || files.length === 0)) {
+				try {
+					const diskFiles = await readDirectoryHandle(workspaceHandle);
+					if (diskFiles && diskFiles.length > 0) {
+						files = diskFiles;
+						ws.fileCount = countAllFiles(files);
+						saveWorkspaceMeta();
+						saveWsFiles(wsId);
+					}
+				} catch (readErr) {
+					console.warn("[KeepLocal] Error auto-populating empty workspace from disk:", readErr);
+				}
 			}
 
 			// Validate selectedId
@@ -1321,6 +1428,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (perm === "granted") {
 				fsPermissionGranted = true;
 				updateFolderUI();
+
+				// If in-memory files are empty, auto-populate from disk
+				if (!files || files.length === 0) {
+					try {
+						const diskFiles = await readDirectoryHandle(workspaceHandle);
+						if (diskFiles && diskFiles.length > 0) {
+							files = diskFiles;
+							if (activeWsId) {
+								updateWsMeta(activeWsId, { fileCount: countAllFiles(files) });
+								saveWsFiles(activeWsId);
+							}
+							render();
+							await loadFile();
+						}
+					} catch (readErr) {
+						console.warn("[KeepLocal] Error reading disk files after reauthorization:", readErr);
+					}
+				}
+
 				await syncWorkspace(true);
 			} else {
 				showAlertModal(
@@ -2244,27 +2370,46 @@ document.addEventListener("DOMContentLoaded", async () => {
 			// Check if another workspace is already linked to this exact folder handle
 			const otherWs = await findWorkspaceByHandle(handle);
 			if (otherWs && otherWs.id !== activeWsId) {
-				const proceed = await new Promise(res => {
+				const activeWsObj = workspaces.find(w => w.id === activeWsId);
+				const currentWsName = activeWsObj?.name || "Current Workspace";
+				const userChoice = await new Promise(res => {
 					showChoiceModal({
-						title: "Folder Already Connected",
-						message: `The folder "${handle.name}" is already linked to another workspace ("${otherWs.name}"). Connecting it here will share this folder across both workspaces. Do you want to proceed?`,
+						title: "Folder Already Linked to Another Workspace",
+						message: `The folder "${handle.name}" is already linked to "${otherWs.name}". A folder should belong to only one workspace to avoid sync collisions and out-of-date caches. What would you like to do?`,
 						choices: [
 							{
-								label: "Connect Anyway",
-								description: "Share this folder with both workspaces.",
-								action: "connect",
+								label: `Switch to "${otherWs.name}"`,
+								description: `Open the workspace that already owns this folder.`,
+								action: "switch",
 								primary: true
 							},
 							{
+								label: `Transfer Folder to "${currentWsName}"`,
+								description: `Unlink "${otherWs.name}" and make "${currentWsName}" the sole workspace for this folder.`,
+								action: "transfer"
+							},
+							{
 								label: "Cancel",
-								description: "Do not connect this folder.",
+								description: "Keep current workspace settings without changing folder.",
 								action: "cancel"
 							}
 						],
-						onSelect: action => res(action === "connect")
+						onSelect: action => res(action)
 					});
 				});
-				if (!proceed) return;
+
+				if (userChoice === "switch") {
+					await openWorkspace(otherWs.id);
+					return;
+				}
+				if (userChoice === "transfer") {
+					// Unlink from otherWs so only activeWsId owns this folder
+					otherWs.folderName = null;
+					await idbDel(`handle_${otherWs.id}`);
+					saveWorkspaceMeta();
+				} else {
+					return;
+				}
 			}
 
 			const readFiles = await readDirectoryHandle(handle);
