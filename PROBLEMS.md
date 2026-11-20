@@ -665,7 +665,7 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Impact:** Users reopen KeepLocal or connect a folder and find notes seemingly missing or disappeared.
   - **How to Fix:** When reconnecting an existing folder handle in `openFolderWorkspace()`, re-read directory entries from disk via `readDirectoryHandle()` and reconcile with in-memory files before opening the workspace.
 
-- [ ] **AUDIT-18: Ephemeral External Image URLs Breaking Cross-Device and Offline**
+- [x] **AUDIT-18: Ephemeral External Image URLs Breaking Cross-Device and Offline** (FIXED)
   - **Severity:** Medium (Offline & Cross-Device Image Failure)
   - **Location:** [`js/script.js#L3388-L3396`](file:///home/raja/Workspace/keepLocal/js/script.js#L3388-L3396) (`CustomImageTool.onPaste`)
   - **Problem Description:** When pasting an image from an external or local dev server (e.g. `<img src="http://raut-devel01:5500/...">`), `CustomImageTool` checks `if (src.startsWith("data:image/"))`, but leaves any other HTTP/HTTPS URL as an external string link. When KeepLocal is accessed from another device, or when the external host/port is unreachable or offline, the image fails with `Unable to load image: ...`.

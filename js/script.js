@@ -1449,7 +1449,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 		if (!url || typeof url !== "string") return "";
 		const trimmed = url.trim();
 		if (/^(?:https?:\/\/|data:|blob:)/i.test(trimmed)) {
-			return trimmed;
+			// If it's a data or blob URL, return directly
+			if (!/^https?:\/\//i.test(trimmed)) {
+				return trimmed;
+			}
+			// If it's an HTTP/HTTPS URL, check if it points to an attachments path and exists locally
+			const attMatch = trimmed.match(/\/attachments\/([^/?#]+)/i);
+			if (attMatch) {
+				const leaf = decodeURIComponent(attMatch[1]);
+				if (attachmentBlobUrlMap.has(leaf)) return attachmentBlobUrlMap.get(leaf);
+				if (attachmentBlobUrlMap.has(`attachments/${leaf}`)) return attachmentBlobUrlMap.get(`attachments/${leaf}`);
+				const attachmentsFolder = files.find(n => n.type === "folder" && n.name.toLowerCase() === "attachments");
+				const found = attachmentsFolder?.children?.some(c => c.name.toLowerCase() === leaf.toLowerCase());
+				if (!found) {
+					return trimmed;
+				}
+				// If found locally in attachments, fall through so it gets resolved and cached below
+			} else {
+				return trimmed;
+			}
 		}
 
 		if (attachmentBlobUrlMap.has(trimmed)) {
@@ -1498,6 +1516,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					attachmentBlobUrlMap.set(`/attachments/${targetNode.name}`, existing);
 					attachmentBlobUrlMap.set(targetNode.name, existing);
 				}
+				attachmentBlobUrlMap.set(trimmed, existing);
 				return existing;
 			} else if (typeof targetNode.content === "string") {
 				if (targetNode.content.startsWith("data:image/")) {
@@ -1508,6 +1527,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					attachmentBlobUrlMap.set(`attachments/${targetNode.name}`, dataUrl);
 					attachmentBlobUrlMap.set(`./attachments/${targetNode.name}`, dataUrl);
 					attachmentBlobUrlMap.set(targetNode.name, dataUrl);
+					attachmentBlobUrlMap.set(trimmed, dataUrl);
 					return dataUrl;
 				}
 			} else if (targetNode.content instanceof ArrayBuffer || (targetNode.content && targetNode.content.buffer instanceof ArrayBuffer)) {
@@ -1521,6 +1541,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					attachmentBlobUrlMap.set(`/attachments/${targetNode.name}`, existing);
 					attachmentBlobUrlMap.set(targetNode.name, existing);
 				}
+				attachmentBlobUrlMap.set(trimmed, existing);
 				return existing;
 			}
 		}
@@ -1655,6 +1676,72 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 	if (typeof window !== "undefined") {
 		window.saveImageToAttachments = saveImageToAttachments;
+	}
+
+	async function fetchAndSaveImageAttachment(url, preferredName = "") {
+		if (!url || typeof url !== "string") return "";
+		const trimmed = url.trim();
+
+		// If it's a data URL, delegate directly to saveImageToAttachments
+		if (trimmed.startsWith("data:image/")) {
+			return await saveImageToAttachments(trimmed, preferredName);
+		}
+
+		// If it's already a relative attachments path or blob url
+		if (trimmed.startsWith("attachments/") || trimmed.startsWith("./attachments/") || trimmed.startsWith("blob:")) {
+			return trimmed;
+		}
+
+		// Check if it points to an attachments path (e.g. http://host:port/attachments/pic.webp)
+		const attMatch = trimmed.match(/\/attachments\/([^/?#]+)/i);
+		if (attMatch) {
+			const leaf = decodeURIComponent(attMatch[1]);
+			const attachmentsFolder = files.find(n => n.type === "folder" && n.name.toLowerCase() === "attachments");
+			const existing = attachmentsFolder?.children?.find(n => n.type === "file" && n.name.toLowerCase() === leaf.toLowerCase());
+			if (existing) {
+				return `attachments/${existing.name}`;
+			}
+		}
+
+		if (!/^https?:\/\//i.test(trimmed)) {
+			return trimmed;
+		}
+
+		// Attempt to fetch remote image and convert it to a local attachment
+		const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+		const timeoutId = controller ? setTimeout(() => controller.abort(), 6000) : null;
+		try {
+			const res = await fetch(trimmed, {
+				mode: "cors",
+				signal: controller?.signal
+			});
+			if (timeoutId) clearTimeout(timeoutId);
+			if (res.ok) {
+				const blob = await res.blob();
+				if (blob && blob.size > 0) {
+					const isImg = blob.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(trimmed);
+					if (isImg) {
+						if (!preferredName) {
+							try {
+								const u = new URL(trimmed);
+								const leaf = u.pathname.split("/").pop() || "";
+								if (leaf && /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(leaf)) {
+									preferredName = decodeURIComponent(leaf);
+								}
+							} catch (_) { }
+						}
+						return await saveImageToAttachments(blob, preferredName);
+					}
+				}
+			}
+		} catch (err) {
+			if (timeoutId) clearTimeout(timeoutId);
+			console.warn("[KeepLocal] fetchAndSaveImageAttachment could not fetch image, preserving URL:", trimmed, err);
+		}
+		return trimmed;
+	}
+	if (typeof window !== "undefined") {
+		window.fetchAndSaveImageAttachment = fetchAndSaveImageAttachment;
 	}
 
 	function loadImageInViewer(file) {
@@ -3477,6 +3564,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 								const relPath = await saveImageToAttachments(src);
 								this._originalUrl = relPath;
 								this.data = { url: relPath };
+							} else if (/^https?:\/\//i.test(src)) {
+								const relPath = await fetchAndSaveImageAttachment(src);
+								this._originalUrl = relPath;
+								this.data = { url: relPath };
 							} else if (src) {
 								this._originalUrl = src;
 								this.data = { url: src };
@@ -3485,7 +3576,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 						}
 						case "pattern": {
 							const url = e.detail?.data || "";
-							if (url) {
+							if (/^https?:\/\//i.test(url)) {
+								const relPath = await fetchAndSaveImageAttachment(url);
+								this._originalUrl = relPath;
+								this.data = { url: relPath };
+							} else if (url) {
 								this._originalUrl = url;
 								this.data = { url };
 							}
@@ -3512,6 +3607,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 							if (blobUrl === url && key.startsWith("attachments/")) {
 								url = key;
 								break;
+							}
+						}
+					}
+					if (url && /^https?:\/\//i.test(url)) {
+						const attMatch = url.match(/\/attachments\/([^/?#]+)/i);
+						if (attMatch) {
+							const leaf = decodeURIComponent(attMatch[1]);
+							const attachmentsFolder = files.find(n => n.type === "folder" && n.name.toLowerCase() === "attachments");
+							if (attachmentsFolder?.children?.some(c => c.name.toLowerCase() === leaf.toLowerCase())) {
+								url = `attachments/${leaf}`;
 							}
 						}
 					}
@@ -3549,6 +3654,59 @@ document.addEventListener("DOMContentLoaded", async () => {
 						}
 					});
 				}
+				_showUrlInput(container) {
+					if (!container) return;
+					const existingInput = container.querySelector(".ce-image-url-input");
+					if (existingInput) return;
+
+					const urlInput = document.createElement("input");
+					urlInput.className = "cdx-input ce-image-url-input";
+					urlInput.placeholder = "Paste image URL or image file and press Enter…";
+					urlInput.style.cssText = "margin-bottom: 8px;";
+					urlInput.addEventListener("keydown", async (e) => {
+						if (e.key === "Enter") {
+							e.preventDefault();
+							const val = urlInput.value.trim();
+							if (val) {
+								let finalUrl = val;
+								if (val.startsWith("data:image/")) {
+									finalUrl = await saveImageToAttachments(val);
+								} else if (/^https?:\/\//i.test(val)) {
+									finalUrl = await fetchAndSaveImageAttachment(val);
+								}
+								this._originalUrl = finalUrl;
+								urlInput.remove();
+								this.data = { url: finalUrl, caption: this.data?.caption || "" };
+								if (typeof autoSaveCurrentFile === "function") {
+									await autoSaveCurrentFile();
+								}
+							}
+						}
+					});
+					urlInput.addEventListener("paste", async (e) => {
+						const items = e.clipboardData?.items;
+						if (!items) return;
+						for (let i = 0; i < items.length; i++) {
+							if (items[i].type && items[i].type.startsWith("image/")) {
+								const file = items[i].getAsFile();
+								if (file) {
+									e.preventDefault();
+									e.stopPropagation();
+									const relPath = await saveImageToAttachments(file);
+									this._originalUrl = relPath;
+									this._cleanWrapperInputs();
+									this.data = { url: relPath, caption: file.name || "image" };
+									if (typeof autoSaveCurrentFile === "function") {
+										await autoSaveCurrentFile();
+									}
+									return;
+								}
+							}
+						}
+					});
+					container.prepend(urlInput);
+					setTimeout(() => urlInput.focus(), 50);
+				}
 				render() {
 					const origUrl = this._originalUrl || this.data?.url || "";
 					this._originalUrl = origUrl;
@@ -3568,15 +3726,73 @@ document.addEventListener("DOMContentLoaded", async () => {
 							if (loader) loader.remove();
 							container.classList.remove(this.CSS.loading);
 
+							// Attempt auto-healing from local attachments if filename matches
+							const rawUrl = this._originalUrl || "";
+							try {
+								const leaf = (rawUrl.split("/").pop() || "").split("?")[0].split("#")[0];
+								if (leaf && isImageFile(leaf)) {
+									const decLeaf = decodeURIComponent(leaf);
+									const resolved = resolveAttachmentUrl(decLeaf);
+									if (resolved && resolved !== imgEl.src) {
+										this._originalUrl = `attachments/${decLeaf}`;
+										this.data = { ...this.data, url: `attachments/${decLeaf}` };
+										imgEl.src = resolved;
+										return;
+									}
+								}
+							} catch (_) { }
+
 							if (!container.querySelector(".ce-image-error-box")) {
 								const errorBox = document.createElement("div");
 								errorBox.className = "ce-image-error-box";
-								errorBox.style.cssText = "display:flex; align-items:center; gap:8px; padding:10px 14px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:var(--text-danger, #ef4444); font-size:12px; margin:8px 0;";
+								errorBox.style.cssText = "display:flex; align-items:center; gap:8px; padding:10px 14px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:var(--text-danger, #ef4444); font-size:12px; margin:8px 0; flex-wrap:wrap;";
 								const displayUrl = (this._originalUrl || "").length > 60 ? ((this._originalUrl || "").slice(0, 60) + "…") : (this._originalUrl || "image");
 								errorBox.innerHTML = `
-									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="14" y2="16"/></svg>
-									<span>Unable to load image: <code style="font-size:11px; word-break:break-all;">${escHtml(displayUrl)}</code></span>
+									<div style="display:flex; align-items:center; gap:8px; flex:1; min-width:200px;">
+										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="14" y2="16"/></svg>
+										<span>Unable to load image: <code style="font-size:11px; word-break:break-all;">${escHtml(displayUrl)}</code></span>
+									</div>
 								`;
+
+								const btnGroup = document.createElement("div");
+								btnGroup.style.cssText = "display:flex; align-items:center; gap:6px; margin-left:auto;";
+
+								const replaceBtn = document.createElement("button");
+								replaceBtn.type = "button";
+								replaceBtn.className = "ce-image-replace-btn";
+								replaceBtn.textContent = "Replace Image…";
+								replaceBtn.style.cssText = "padding:4px 10px; font-size:11px; font-weight:500; background:var(--bg-secondary, #2a2d37); border:1px solid var(--border-color, #444); border-radius:4px; color:var(--text-primary, #fff); cursor:pointer; white-space:nowrap;";
+								replaceBtn.addEventListener("click", () => {
+									const fileInput = document.createElement("input");
+									fileInput.type = "file";
+									fileInput.accept = "image/*";
+									fileInput.onchange = async () => {
+										const file = fileInput.files?.[0];
+										if (!file) return;
+										const relPath = await saveImageToAttachments(file);
+										this._originalUrl = relPath;
+										this._cleanWrapperInputs();
+										this.data = { url: relPath, caption: this.data?.caption || file.name || "image" };
+										if (typeof autoSaveCurrentFile === "function") {
+											await autoSaveCurrentFile();
+										}
+									};
+									fileInput.click();
+								});
+								btnGroup.appendChild(replaceBtn);
+
+								const editUrlBtn = document.createElement("button");
+								editUrlBtn.type = "button";
+								editUrlBtn.className = "ce-image-edit-url-btn";
+								editUrlBtn.textContent = "Edit URL";
+								editUrlBtn.style.cssText = "padding:4px 8px; font-size:11px; background:transparent; border:1px solid var(--border-color, #444); border-radius:4px; color:var(--text-secondary, #aaa); cursor:pointer; white-space:nowrap;";
+								editUrlBtn.addEventListener("click", () => {
+									errorBox.remove();
+									this._showUrlInput(container);
+								});
+								btnGroup.appendChild(editUrlBtn);
+
+								errorBox.appendChild(btnGroup);
 								container.appendChild(errorBox);
 							}
 							if (this.nodes.caption && !container.contains(this.nodes.caption)) {
@@ -3606,44 +3822,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					attachErrorHandler();
 
 					if (!origUrl) {
-						const urlInput = document.createElement("input");
-						urlInput.className = "cdx-input ce-image-url-input";
-						urlInput.placeholder = "Paste image URL or image file and press Enter…";
-						urlInput.style.cssText = "margin-bottom: 8px;";
-						urlInput.addEventListener("keydown", async (e) => {
-							if (e.key === "Enter") {
-								e.preventDefault();
-								const val = urlInput.value.trim();
-								if (val) {
-									let finalUrl = val;
-									if (val.startsWith("data:image/")) {
-										finalUrl = await saveImageToAttachments(val);
-									}
-									this._originalUrl = finalUrl;
-									urlInput.remove();
-									this.data = { url: finalUrl, caption: this.data.caption || "" };
-								}
-							}
-						});
-						urlInput.addEventListener("paste", async (e) => {
-							const items = e.clipboardData?.items;
-							if (!items) return;
-							for (let i = 0; i < items.length; i++) {
-								if (items[i].type && items[i].type.startsWith("image/")) {
-									const file = items[i].getAsFile();
-									if (file) {
-										e.preventDefault();
-										e.stopPropagation();
-										const relPath = await saveImageToAttachments(file);
-										this._originalUrl = relPath;
-										this._cleanWrapperInputs();
-										this.data = { url: relPath, caption: file.name || "image" };
-										return;
-									}
-								}
-							}
-						});
-						container.prepend(urlInput);
+						this._showUrlInput(container);
 					}
 					return container;
 				}
@@ -4168,6 +4347,32 @@ document.addEventListener("DOMContentLoaded", async () => {
 					e.preventDefault();
 					const relPath = await saveImageToAttachments(file);
 					const mdLink = `![image](${relPath})\n`;
+					const start = editorTextarea.selectionStart;
+					const end = editorTextarea.selectionEnd;
+					const val = editorTextarea.value;
+					editorTextarea.value = val.substring(0, start) + mdLink + val.substring(end);
+					editorTextarea.selectionStart = editorTextarea.selectionEnd = start + mdLink.length;
+					editorTextarea.dispatchEvent(new Event("input"));
+					return;
+				}
+			}
+		}
+	});
+
+	editorTextarea.addEventListener("dragover", (e) => {
+		if (e.dataTransfer?.types?.includes("Files")) {
+			e.preventDefault();
+		}
+	});
+
+	editorTextarea.addEventListener("drop", async (e) => {
+		const transferFiles = e.dataTransfer?.files;
+		if (transferFiles && transferFiles.length > 0) {
+			for (let i = 0; i < transferFiles.length; i++) {
+				if (transferFiles[i].type && transferFiles[i].type.startsWith("image/")) {
+					e.preventDefault();
+					const relPath = await saveImageToAttachments(transferFiles[i]);
+					const mdLink = `![${transferFiles[i].name || "image"}](${relPath})\n`;
 					const start = editorTextarea.selectionStart;
 					const end = editorTextarea.selectionEnd;
 					const val = editorTextarea.value;
