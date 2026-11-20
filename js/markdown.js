@@ -257,9 +257,12 @@
 	function md2h(s) {
 		if (!s) return "";
 		let res = escHtml(s);
+		res = res.replace(/&lt;br\s*\/?&gt;/gi, '<br>');
 		res = res.replace(/&lt;u&gt;(.*?)&lt;\/u&gt;/gi, '<u class="cdx-underline">$1</u>');
 		res = res.replace(/&lt;mark(?: class="cdx-marker")?&gt;(.*?)&lt;\/mark&gt;/gi, '<mark class="cdx-marker">$1</mark>');
 		res = res.replace(/==([^=]+)==/g, '<mark class="cdx-marker">$1</mark>');
+		res = res.replace(/~~(.*?)~~/g, '<s>$1</s>');
+		res = res.replace(/&lt;(?:s|strike|del)&gt;(.*?)&lt;\/(?:s|strike|del)&gt;/gi, '<s>$1</s>');
 		res = replaceMarkdownLinksAndImages(res, sanitizeUrl);
 
 		// Mask HTML tags to avoid corrupting attributes
@@ -316,6 +319,7 @@
 			})
 			.replace(/<mark[^>]*>(.*?)<\/mark>/gi, "==$1==")
 			.replace(/<u[^>]*>(.*?)<\/u>/gi, "%%%U_OPEN%%%$1%%%U_CLOSE%%%")
+			.replace(/<(?:s|strike|del)[^>]*>(.*?)<\/(?:s|strike|del)>/gi, "~~$1~~")
 			.replace(/<b>(.*?)<\/b>/gi, "**$1**").replace(/<strong>(.*?)<\/strong>/gi, "**$1**")
 			.replace(/<i>(.*?)<\/i>/gi, "*$1*").replace(/<em>(.*?)<\/em>/gi, "*$1*")
 			.replace(/<code[^>]*>(.*?)<\/code>/gi, "`$1`")
@@ -328,6 +332,45 @@
 			.replace(/&quot;/g, '"')
 			.replace(/<[^>]+>/g, "")
 			.replace(/%%%U_OPEN%%%/g, "<u>").replace(/%%%U_CLOSE%%%/g, "</u>");
+	}
+
+	function hasUnescapedPipe(str) {
+		if (!str || !str.includes("|")) return false;
+		let inBacktick = false;
+		let backtickCount = 0;
+		let i = 0;
+		while (i < str.length) {
+			if (str[i] === "\\") {
+				i += 2;
+				continue;
+			}
+			if (str[i] === "`") {
+				let count = 0;
+				while (i < str.length && str[i] === "`") {
+					count++;
+					i++;
+				}
+				if (!inBacktick) {
+					inBacktick = true;
+					backtickCount = count;
+				} else if (backtickCount === count) {
+					inBacktick = false;
+					backtickCount = 0;
+				}
+				continue;
+			}
+			if (str[i] === "|" && !inBacktick) return true;
+			i++;
+		}
+		return false;
+	}
+
+	function isTableDelimiterRow(str) {
+		if (!str) return false;
+		const trimmed = str.trim();
+		if (!trimmed || !trimmed.includes("|") || !trimmed.includes("-")) return false;
+		const parts = splitTableRow(trimmed);
+		return parts.length >= 1 && parts.every(p => /^:?-+:?$/.test(p.trim()));
 	}
 
 	function splitTableRow(rowStr) {
@@ -593,12 +636,11 @@
 
 		const flushTable = () => {
 			if (!tableBuf.length) return;
-			const hasHeaderSep = tableBuf.length > 1 && splitTableRow(tableBuf[1]).every(c => /^:?-+:?$/.test(c.trim()));
+			const hasHeaderSep = tableBuf.length > 1 && isTableDelimiterRow(tableBuf[1]);
 			const content = tableBuf
 				.map(r => splitTableRow(r).map(c => {
 					const unescaped = unescapeCellPipes(c);
 					let html = md2h(unescaped);
-					html = html.replace(/&lt;br\s*\/?&gt;/gi, "<br>");
 					return html;
 				}))
 				.filter(r => r.length && !r.every(c => /^:?-+:?$/.test(c.trim())));
@@ -615,7 +657,8 @@
 			tableTight = false;
 		};
 
-		for (const line of lines) {
+		for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+			const line = lines[lineIdx];
 			if (line.trim().startsWith("```")) {
 				listStack = [];
 				if (inCode) {
@@ -637,7 +680,11 @@
 			}
 			if (inCode) { codeBuf.push(line); continue; }
 
-			if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+			const isTableLine = (tableBuf.length === 0)
+				? ((line.trim().startsWith("|") && line.trim().endsWith("|")) || (hasUnescapedPipe(line) && lineIdx + 1 < lines.length && isTableDelimiterRow(lines[lineIdx + 1])))
+				: ((line.trim().startsWith("|") && line.trim().endsWith("|")) || hasUnescapedPipe(line) || isTableDelimiterRow(line));
+
+			if (isTableLine) {
 				listStack = [];
 				if (tableBuf.length === 0) {
 					if (blocks.length > 0 && blankCount > 1) {
@@ -1000,7 +1047,9 @@
 		resolveSafeZipPath,
 		splitTableRow,
 		unescapeCellPipes,
-		formatTableCellForMd
+		formatTableCellForMd,
+		hasUnescapedPipe,
+		isTableDelimiterRow
 	};
 
 	global.KeepLocalMarkdown = KeepLocalMarkdown;

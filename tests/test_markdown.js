@@ -154,6 +154,34 @@ assert.strictEqual(KeepLocalMarkdown.formatTableCellForMd("a | b"), "a \\| b");
 assert.strictEqual(KeepLocalMarkdown.formatTableCellForMd("`x | y`"), "`x | y`");
 assert.strictEqual(KeepLocalMarkdown.formatTableCellForMd("line 1<br>line 2"), "line 1<br>line 2");
 
+// AUDIT-22: Standard GFM tables without outer pipes
+const noOuterPipesTableMd = "Name | Age | Role\n---|---|---\nAlice | 30 | Engineer\nBob | 25 | Designer";
+const noOuterPipesBlocks = KeepLocalMarkdown.textToBlocks(noOuterPipesTableMd);
+assert.strictEqual(noOuterPipesBlocks[0].type, "table");
+assert.strictEqual(noOuterPipesBlocks[0].data.withHeadings, true);
+assert.deepStrictEqual(noOuterPipesBlocks[0].data.content, [
+	["Name", "Age", "Role"],
+	["Alice", "30", "Engineer"],
+	["Bob", "25", "Designer"]
+]);
+
+// Non-table with inline pipe should not be parsed as table
+const nonTableMd = "Choose Option A | Option B in settings.\nClick Apply to confirm.";
+const nonTableBlocks = KeepLocalMarkdown.textToBlocks(nonTableMd);
+assert.strictEqual(nonTableBlocks[0].type, "paragraph");
+assert.strictEqual(nonTableBlocks[1].type, "paragraph");
+
+// AUDIT-23: Unescaped <br> and strikethrough ~~ in markdown parser
+assert.strictEqual(KeepLocalMarkdown.md2h("Hello<br>World"), "Hello<br>World");
+assert.strictEqual(KeepLocalMarkdown.md2h("Hello<br/>World"), "Hello<br>World");
+assert.strictEqual(KeepLocalMarkdown.h2md("Hello<br>World"), "Hello\nWorld");
+assert.strictEqual(KeepLocalMarkdown.md2h("This is ~~strike~~"), "This is <s>strike</s>");
+assert.strictEqual(KeepLocalMarkdown.h2md("This is <s>strike</s>"), "This is ~~strike~~");
+assert.strictEqual(KeepLocalMarkdown.h2md("This is <del>deleted</del>"), "This is ~~deleted~~");
+assert.strictEqual(KeepLocalMarkdown.h2md("This is <strike>struck</strike>"), "This is ~~struck~~");
+assert.strictEqual(KeepLocalMarkdown.md2h("~~**bold strike**~~"), "<s><b>bold strike</b></s>");
+assert.strictEqual(KeepLocalMarkdown.h2md("<s><b>bold strike</b></s>"), "~~**bold strike**~~");
+
 console.log("✓ textToBlocks tests passed");
 
 // 7. blocksToText roundtrip
