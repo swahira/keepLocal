@@ -680,8 +680,98 @@
 		return stack;
 	}
 
+	function isImageFile(filename) {
+		if (!filename || typeof filename !== "string") return false;
+		const ext = filename.split(".").pop()?.toLowerCase();
+		return ["webp", "png", "jpg", "jpeg", "gif", "svg", "bmp", "ico", "avif"].includes(ext);
+	}
+
+	function cloneFileNode(node) {
+		if (!node || typeof node !== "object") return node;
+		const copy = { ...node };
+		if (Array.isArray(node.children)) {
+			copy.children = node.children.map(cloneFileNode);
+		}
+		return copy;
+	}
+
+	function mergeFileTrees(baseFolderFiles, localFiles, options = {}) {
+		const genId = typeof options.idGenerator === "function"
+			? options.idGenerator
+			: () => "file_" + Math.random().toString(36).slice(2, 9);
+		const nameExists = typeof options.nameExists === "function"
+			? options.nameExists
+			: (arr, name) => arr.some(n => n.name?.toLowerCase() === name?.toLowerCase());
+		const isImg = typeof options.isImage === "function"
+			? options.isImage
+			: isImageFile;
+
+		const merged = (baseFolderFiles || []).map(cloneFileNode);
+
+		function mergeNodes(targetArr, sourceNodes) {
+			for (const src of (sourceNodes || [])) {
+				if (!src) continue;
+				if (src.type === "file") {
+					const existing = targetArr.find(x => x.type === "file" && x.name?.toLowerCase() === src.name?.toLowerCase());
+					if (!existing) {
+						targetArr.push(cloneFileNode(src));
+					} else {
+						const isSrcImg = !!(src.isBinary || isImg(src.name));
+						const isExistingImg = !!(existing.isBinary || isImg(existing.name));
+
+						if (isSrcImg || isExistingImg) {
+							// For binary / image attachments, preserve valid content and prevent duplicate (local) files
+							const hasExistingContent = existing.content && (typeof existing.content !== "object" || (typeof Blob !== "undefined" && existing.content instanceof Blob) || (typeof ArrayBuffer !== "undefined" && (existing.content instanceof ArrayBuffer || ArrayBuffer.isView(existing.content))));
+							const hasSrcContent = src.content && (typeof src.content !== "object" || (typeof Blob !== "undefined" && src.content instanceof Blob) || (typeof ArrayBuffer !== "undefined" && (src.content instanceof ArrayBuffer || ArrayBuffer.isView(src.content))));
+
+							if (!hasExistingContent && hasSrcContent) {
+								existing.content = src.content;
+								existing.isBinary = true;
+								if (src.mimeType) existing.mimeType = src.mimeType;
+								if (src.size) existing.size = src.size;
+							}
+						} else {
+							// For text notes, compare text strings
+							const existingContent = typeof existing.content === "string" ? existing.content : "";
+							const srcContent = typeof src.content === "string" ? src.content : "";
+							if (existingContent !== srcContent) {
+								const dot = src.name.lastIndexOf(".");
+								const baseName = dot > 0 ? src.name.slice(0, dot) : src.name;
+								const ext = dot > 0 ? src.name.slice(dot) : "";
+								let counter = 1;
+								let uniqueName = `${baseName} (local)${ext}`;
+								while (nameExists(targetArr, uniqueName)) {
+									counter++;
+									uniqueName = `${baseName} (local ${counter})${ext}`;
+								}
+								const copy = cloneFileNode(src);
+								copy.id = genId();
+								copy.name = uniqueName;
+								targetArr.push(copy);
+							}
+						}
+					}
+				} else if (src.type === "folder") {
+					const existingFolder = targetArr.find(x => x.type === "folder" && x.name?.toLowerCase() === src.name?.toLowerCase());
+					if (!existingFolder) {
+						targetArr.push(cloneFileNode(src));
+					} else {
+						existingFolder.children = existingFolder.children || [];
+						mergeNodes(existingFolder.children, src.children || []);
+					}
+				}
+			}
+		}
+
+		mergeNodes(merged, localFiles || []);
+		return merged;
+	}
+
 	const KeepLocalMarkdown = {
 		isMarkdownFile,
+		isImageFile,
+		cloneFileNode,
+		mergeFileTrees,
 		escHtml,
 		sanitizeUrl,
 		parseStandaloneImage,

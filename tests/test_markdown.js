@@ -241,4 +241,161 @@ const brBlocks = [
 assert.strictEqual(KeepLocalMarkdown.blocksToText({ blocks: brBlocks }), "Text 1\n\n\nText 2");
 console.log("✓ tight image and roundtrip idempotency tests passed");
 
+// 9. isImageFile tests
+assert.strictEqual(KeepLocalMarkdown.isImageFile("photo.webp"), true);
+assert.strictEqual(KeepLocalMarkdown.isImageFile("image.PNG"), true);
+assert.strictEqual(KeepLocalMarkdown.isImageFile("vector.svg"), true);
+assert.strictEqual(KeepLocalMarkdown.isImageFile("notes.md"), false);
+assert.strictEqual(KeepLocalMarkdown.isImageFile(""), false);
+assert.strictEqual(KeepLocalMarkdown.isImageFile(null), false);
+console.log("✓ isImageFile tests passed");
+
+// 10. cloneFileNode tests
+const mockBlob = new Blob(["sample image binary data"], { type: "image/webp" });
+const originalTree = {
+	id: "folder_1",
+	name: "attachments",
+	type: "folder",
+	children: [
+		{
+			id: "file_img_1",
+			name: "image_1.webp",
+			type: "file",
+			isBinary: true,
+			content: mockBlob
+		}
+	]
+};
+
+const clonedTree = KeepLocalMarkdown.cloneFileNode(originalTree);
+assert.notStrictEqual(clonedTree, originalTree, "Root folder must be a new object reference");
+assert.notStrictEqual(clonedTree.children, originalTree.children, "Children array must be a new reference");
+assert.strictEqual(clonedTree.children[0].content instanceof Blob, true, "Cloned file content must remain an instance of Blob");
+assert.strictEqual(clonedTree.children[0].content, mockBlob, "Blob reference must be preserved without serialization corruption");
+// Mutating clone children shouldn't affect original
+clonedTree.children.push({ id: "file_2", name: "new.md", type: "file" });
+assert.strictEqual(originalTree.children.length, 1, "Original tree children must not be mutated");
+console.log("✓ cloneFileNode tests passed");
+
+// 11. mergeFileTrees tests
+const imgBlobA = new Blob(["blob_a_data"], { type: "image/webp" });
+const imgBlobB = new Blob(["blob_b_data"], { type: "image/webp" });
+
+const baseFolderNodes = [
+	{
+		id: "f_attachments",
+		name: "attachments",
+		type: "folder",
+		children: [
+			{
+				id: "f_img_1",
+				name: "diagram.webp",
+				type: "file",
+				isBinary: true,
+				mimeType: "image/webp",
+				content: imgBlobA
+			}
+		]
+	},
+	{
+		id: "f_doc_1",
+		name: "untitled.md",
+		type: "file",
+		content: "# Original Disk Content"
+	}
+];
+
+const localWorkspaceNodes = [
+	{
+		id: "f_attachments_local",
+		name: "attachments",
+		type: "folder",
+		children: [
+			{
+				id: "f_img_1_local",
+				name: "diagram.webp",
+				type: "file",
+				isBinary: true,
+				mimeType: "image/webp",
+				content: imgBlobB
+			}
+		]
+	},
+	{
+		id: "f_doc_1_local",
+		name: "untitled.md",
+		type: "file",
+		content: "# Modified Local Content"
+	},
+	{
+		id: "f_doc_2_local",
+		name: "untitled-1.md",
+		type: "file",
+		content: "# New Local Note"
+	}
+];
+
+const mergedTree = KeepLocalMarkdown.mergeFileTrees(baseFolderNodes, localWorkspaceNodes);
+
+// A. Attachment folder checks
+const mergedAttachments = mergedTree.find(n => n.name === "attachments");
+assert.ok(mergedAttachments, "Merged tree must contain attachments folder");
+assert.strictEqual(mergedAttachments.children.length, 1, "Duplicate attachment images must NOT be generated with (local) copies");
+assert.strictEqual(mergedAttachments.children[0].content instanceof Blob, true, "Attachment content must remain an instance of Blob, never {}");
+assert.strictEqual(mergedAttachments.children[0].name, "diagram.webp");
+
+// B. Text file conflict checks
+const docOriginal = mergedTree.find(n => n.name === "untitled.md");
+assert.ok(docOriginal, "Base file must be preserved in merged tree");
+assert.strictEqual(docOriginal.content, "# Original Disk Content");
+
+const docLocalCopy = mergedTree.find(n => n.name === "untitled (local).md");
+assert.ok(docLocalCopy, "Conflicting local text file must be preserved as (local)");
+assert.strictEqual(docLocalCopy.content, "# Modified Local Content");
+
+// C. New non-conflicting local note checks
+const docNew = mergedTree.find(n => n.name === "untitled-1.md");
+assert.ok(docNew, "New unique local note must be merged into tree");
+assert.strictEqual(docNew.content, "# New Local Note");
+
+// D. Repair corrupted attachment test
+const corruptedBase = [
+	{
+		id: "f_att",
+		name: "attachments",
+		type: "folder",
+		children: [
+			{
+				id: "f_corrupted",
+				name: "corrupted.webp",
+				type: "file",
+				isBinary: true,
+				content: {} // simulated corrupted content
+			}
+		]
+	}
+];
+
+const healthyLocal = [
+	{
+		id: "f_att_l",
+		name: "attachments",
+		type: "folder",
+		children: [
+			{
+				id: "f_healthy",
+				name: "corrupted.webp",
+				type: "file",
+				isBinary: true,
+				content: imgBlobA
+			}
+		]
+	}
+];
+
+const repairedTree = KeepLocalMarkdown.mergeFileTrees(corruptedBase, healthyLocal);
+const repairedAtt = repairedTree.find(n => n.name === "attachments");
+assert.strictEqual(repairedAtt.children[0].content instanceof Blob, true, "Corrupted attachment object should be healed by healthy local blob");
+console.log("✓ mergeFileTrees binary preservation, deduplication and healing tests passed");
+
 console.log("All KeepLocalMarkdown unit tests passed successfully!");

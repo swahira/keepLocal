@@ -2000,31 +2000,69 @@ document.addEventListener("DOMContentLoaded", async () => {
 	// ============================================================
 	// FILESYSTEM SYNC
 	// ============================================================
+	function cloneFileNode(node) {
+		return KeepLocalMarkdown && typeof KeepLocalMarkdown.cloneFileNode === "function"
+			? KeepLocalMarkdown.cloneFileNode(node)
+			: (node ? { ...node, children: Array.isArray(node.children) ? node.children.map(cloneFileNode) : undefined } : null);
+	}
+
 	function mergeFileTrees(baseFolderFiles, localFiles) {
-		const merged = JSON.parse(JSON.stringify(baseFolderFiles));
+		if (KeepLocalMarkdown && typeof KeepLocalMarkdown.mergeFileTrees === "function") {
+			return KeepLocalMarkdown.mergeFileTrees(baseFolderFiles, localFiles, {
+				idGenerator: () => uid("file"),
+				nameExists: nameExistsInArray,
+				isImage: isImageFile
+			});
+		}
+
+		const merged = (baseFolderFiles || []).map(cloneFileNode);
 
 		function mergeNodes(targetArr, sourceNodes) {
-			for (const src of sourceNodes) {
+			for (const src of (sourceNodes || [])) {
+				if (!src) continue;
 				if (src.type === "file") {
-					const existing = targetArr.find(x => x.name.toLowerCase() === src.name.toLowerCase());
+					const existing = targetArr.find(x => x.type === "file" && x.name?.toLowerCase() === src.name?.toLowerCase());
 					if (!existing) {
-						targetArr.push(JSON.parse(JSON.stringify(src)));
-					} else if (existing.content !== src.content) {
-						const dot = src.name.lastIndexOf(".");
-						const baseName = dot > 0 ? src.name.slice(0, dot) : src.name;
-						const ext = dot > 0 ? src.name.slice(dot) : "";
-						let counter = 1;
-						let uniqueName = `${baseName} (local)${ext}`;
-						while (nameExistsInArray(targetArr, uniqueName)) {
-							counter++;
-							uniqueName = `${baseName} (local ${counter})${ext}`;
+						targetArr.push(cloneFileNode(src));
+					} else {
+						const isSrcImg = !!(src.isBinary || isImageFile(src.name));
+						const isExistingImg = !!(existing.isBinary || isImageFile(existing.name));
+
+						if (isSrcImg || isExistingImg) {
+							// Preserve valid binary attachment data; do not duplicate images into (local) copies
+							const hasExistingContent = existing.content && (typeof existing.content !== "object" || (typeof Blob !== "undefined" && existing.content instanceof Blob) || (typeof ArrayBuffer !== "undefined" && (existing.content instanceof ArrayBuffer || ArrayBuffer.isView(existing.content))));
+							const hasSrcContent = src.content && (typeof src.content !== "object" || (typeof Blob !== "undefined" && src.content instanceof Blob) || (typeof ArrayBuffer !== "undefined" && (src.content instanceof ArrayBuffer || ArrayBuffer.isView(src.content))));
+
+							if (!hasExistingContent && hasSrcContent) {
+								existing.content = src.content;
+								existing.isBinary = true;
+								if (src.mimeType) existing.mimeType = src.mimeType;
+								if (src.size) existing.size = src.size;
+							}
+						} else {
+							const existingContent = typeof existing.content === "string" ? existing.content : "";
+							const srcContent = typeof src.content === "string" ? src.content : "";
+							if (existingContent !== srcContent) {
+								const dot = src.name.lastIndexOf(".");
+								const baseName = dot > 0 ? src.name.slice(0, dot) : src.name;
+								const ext = dot > 0 ? src.name.slice(dot) : "";
+								let counter = 1;
+								let uniqueName = `${baseName} (local)${ext}`;
+								while (nameExistsInArray(targetArr, uniqueName)) {
+									counter++;
+									uniqueName = `${baseName} (local ${counter})${ext}`;
+								}
+								const copy = cloneFileNode(src);
+								copy.id = uid("file");
+								copy.name = uniqueName;
+								targetArr.push(copy);
+							}
 						}
-						targetArr.push({ ...JSON.parse(JSON.stringify(src)), id: uid("file"), name: uniqueName });
 					}
 				} else if (src.type === "folder") {
-					const existingFolder = targetArr.find(x => x.type === "folder" && x.name.toLowerCase() === src.name.toLowerCase());
+					const existingFolder = targetArr.find(x => x.type === "folder" && x.name?.toLowerCase() === src.name?.toLowerCase());
 					if (!existingFolder) {
-						targetArr.push(JSON.parse(JSON.stringify(src)));
+						targetArr.push(cloneFileNode(src));
 					} else {
 						existingFolder.children = existingFolder.children || [];
 						mergeNodes(existingFolder.children, src.children || []);
@@ -2033,7 +2071,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		}
 
-		mergeNodes(merged, localFiles);
+		mergeNodes(merged, localFiles || []);
 		return merged;
 	}
 
@@ -2268,7 +2306,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 	async function writeFile(dirHandle, name, content) {
 		const fh = await dirHandle.getFileHandle(name, { create: true });
 		const w = await fh.createWritable();
-		await w.write(content);
+		if (content && typeof content === "object" && !(content instanceof Blob) && !(content instanceof ArrayBuffer) && !ArrayBuffer.isView(content)) {
+			console.warn("[KeepLocal] Refusing to write invalid plain object to file:", name);
+			await w.close();
+			return;
+		}
+		await w.write(content ?? "");
 		await w.close();
 	}
 
@@ -2276,12 +2319,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 		for (const n of nodes) {
 			if (n.type === "file") {
 				if (n._diskContent !== n.content) {
-					await writeFile(dirHandle, n.name, n.content || "");
-					n._diskContent = n.content || "";
+					try {
+						let contentToWrite = n.content;
+						if (contentToWrite && typeof contentToWrite === "object" && !(contentToWrite instanceof Blob) && !(contentToWrite instanceof ArrayBuffer) && !ArrayBuffer.isView(contentToWrite)) {
+							console.warn("[KeepLocal] Skipping write of invalid object content for:", n.name);
+							continue;
+						}
+						await writeFile(dirHandle, n.name, contentToWrite ?? "");
+						n._diskContent = n.content;
+					} catch (writeErr) {
+						if (writeErr.name === "NotAllowedError") throw writeErr;
+						console.warn("[KeepLocal] Error writing file to disk:", n.name, writeErr);
+					}
 				}
 			} else {
-				const sub = await dirHandle.getDirectoryHandle(n.name, { create: true });
-				await saveNodes(sub, n.children || []);
+				try {
+					const sub = await dirHandle.getDirectoryHandle(n.name, { create: true });
+					await saveNodes(sub, n.children || []);
+				} catch (dirErr) {
+					if (dirErr.name === "NotAllowedError") throw dirErr;
+					console.warn("[KeepLocal] Error writing directory to disk:", n.name, dirErr);
+				}
 			}
 		}
 	}
@@ -2375,6 +2433,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 				updateFolderUI();
 			} else {
 				console.warn("Sync error:", e);
+				if (wsStatusBadge && workspaceHandle) {
+					wsStatusBadge.textContent = workspaceHandle.name;
+				}
 			}
 		} finally {
 			isSyncing = false;
@@ -2433,9 +2494,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			selectedId = nf.id;
 			persistCurrent();
 			render();
-			setTimeout(() => beginInlineRename(nf.id), 40);
 			await loadFile();
 			syncWorkspace();
+			setTimeout(() => beginInlineRename(nf.id), 60);
 		} finally {
 			isAddingFile = false;
 		}
@@ -3443,13 +3504,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 							const cls = this.CSS.imageHolder + "--" + tune.name.replace(/([A-Z])/g, t => `-${t[0].toLowerCase()}`);
 							this.nodes.imageHolder.classList.toggle(cls, !!this.data[tune.name]);
 						}
-						if (tune.name === "stretched") {
-							const block = (typeof this.api?.blocks?.getBlockByIndex === "function")
-								? (this.api.blocks.getBlockByIndex(this.blockIndex) || this.api.blocks.getBlockByIndex(this.api.blocks.getCurrentBlockIndex()))
-								: null;
-							if (block && typeof block.stretched !== "undefined") {
-								block.stretched = !!this.data.stretched;
-							}
+						if (tune.name === "stretched" && typeof this.api?.blocks?.getBlockByIndex === "function") {
+							try {
+								const totalBlocks = typeof this.api.blocks.getBlocksCount === "function" ? this.api.blocks.getBlocksCount() : 0;
+								let block = null;
+								if (typeof this.blockIndex === "number" && this.blockIndex >= 0 && this.blockIndex < totalBlocks) {
+									block = this.api.blocks.getBlockByIndex(this.blockIndex);
+								} else if (typeof this.api.blocks.getCurrentBlockIndex === "function") {
+									const curIdx = this.api.blocks.getCurrentBlockIndex();
+									if (curIdx >= 0 && curIdx < totalBlocks) {
+										block = this.api.blocks.getBlockByIndex(curIdx);
+									}
+								}
+								if (block && typeof block.stretched !== "undefined") {
+									block.stretched = !!this.data.stretched;
+								}
+							} catch (_) { }
 						}
 					});
 				}

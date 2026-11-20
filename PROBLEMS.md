@@ -18,7 +18,8 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
 | **Accessibility, Responsiveness & Shortcuts** | 5 | 0 | 1 | 2 | 2 |
 | **Architecture, Offline & Security** | 4 | 1 | 1 | 1 | 1 |
 | **Post-IndexedDB Migration Engine Audit** | 14 | 2 | 7 | 5 | 0 |
-| **Total** | **62** | **9** | **26** | **22** | **5** |
+| **Issue #24 Folder Sync & Attachments Audit** | 5 | 1 | 2 | 2 | 0 |
+| **Total** | **67** | **10** | **28** | **24** | **5** |
 
 ---
 
@@ -638,3 +639,42 @@ This document contains a thorough technical audit of the KeepLocal codebase (`in
   - **Problem Description:** When deleting a workspace via `deleteWorkspace(wsId)`, if that workspace was currently active (`wsId === activeWsId`), `localStorage.getItem("keeplocal_active_ws_id")` was left pointing to the deleted ID, and `activeWsId`, `workspaceHandle`, `files`, `openTabs`, and `selectedId` were not reset. The editor remained open on the deleted workspace, and any further user keystrokes resurrected deleted data into IndexedDB.
   - **Impact:** Stale editor state, zombie data resurrection in IndexedDB, and broken startup routing.
   - **How to Fix:** In `deleteWorkspace(wsId)`, check if `localStorage.getItem("keeplocal_active_ws_id") === wsId` and remove it; if `activeWsId === wsId`, reset `activeWsId = null`, `workspaceHandle = null`, `fsPermissionGranted = false`, `files = []`, `selectedId = null`, `openTabs = []`, `editorLoadedFileId = null`, destroy `editorInstance`, and navigate to `showWelcome()`.
+
+---
+
+## 11. Issue #24: Folder Sync, Attachments & State Consistency Audit (November 2026)
+
+- [x] **AUDIT-15: Sync Engine Fatal Lockup & Unsaved Notes via Corrupted Write Parameters** (FIXED)
+  - **Severity:** Critical (Data Loss & UI Freeze)
+  - **Location:** [`js/script.js#L2268-L2287`](file:///home/raja/Workspace/keepLocal/js/script.js#L2268-L2287) (`saveNodes`, `writeFile`) & [`js/script.js#L2318-L2379`](file:///home/raja/Workspace/keepLocal/js/script.js#L2318-L2379) (`performDiskSync`)
+  - **Problem Description:** In `saveNodes()`, directories (such as `attachments/`) are traversed before file notes. When an image node has invalid or corrupted content (e.g. `{}`), `writeFile()` passes it to `FileSystemWritableFileStream.write({})`, which throws `TypeError: Failed to execute 'write' on 'FileSystemWritableFileStream': Invalid write params`. This unhandled rejection halts `saveNodes()` immediately before any subsequent markdown notes are processed. In `performDiskSync()`, the error is caught but `wsStatusBadge.textContent` is never reset from `"Saving…"`, leaving the UI permanently stuck on "Saving..." and preventing any newly created notes from ever being written to the computer's hard drive.
+  - **Impact:** Complete failure of disk sync; newly created notes are never written to disk; UI is permanently stuck displaying "Saving…".
+  - **How to Fix:** In `saveNodes()`, wrap individual file writes in try/catch blocks so an individual image failure does not abort saving other files; validate that `n.content` is a string, Blob, or BufferSource before writing; and ensure `performDiskSync()` always resets `wsStatusBadge` to an error indicator or back to the folder name on error.
+
+- [x] **AUDIT-16: Binary Image Data Destruction & Massive Attachment Duplication in `mergeFileTrees`** (FIXED)
+  - **Severity:** High (Data Destruction & Storage Bloat)
+  - **Location:** [`js/script.js#L2006-L2035`](file:///home/raja/Workspace/keepLocal/js/script.js#L2006-L2035) (`mergeFileTrees`), [`js/markdown.js`](file:///home/raja/Workspace/keepLocal/js/markdown.js) (`cloneFileNode`, `mergeFileTrees`)
+  - **Problem Description:** In `mergeFileTrees()`, using `JSON.parse(JSON.stringify(...))` destroyed all `Blob` instances by serializing them to `{}`. Furthermore, existing files and incoming files were compared using `existing.content !== src.content`. For binary files and image Blobs, object identity comparison in JavaScript is always reference-inequal (`blob !== blob` evaluates to `true`). Every time a folder was connected or merged, all images lost their binary data and every attachment was falsely identified as a conflict and duplicated with `(local)`, `(local 2)`, etc., bloating the workspace with duplicate images while rendering "Unable to load image" errors in the editor.
+  - **Impact:** Irreversible loss of image display in notes, rapid workspace bloat, dozens of redundant duplicate image files created on every folder connection.
+  - **How to Fix:** Implement recursive `cloneFileNode()` that retains `Blob` and `ArrayBuffer` instances; in `mergeFileTrees()`, avoid naive `!==` object comparisons on images, preserve valid binary attachment data, deduplicate by filename, and prevent creation of redundant `(local)` image duplicates.
+
+- [ ] **AUDIT-17: Stale IDB Loading on Directory Reconnect and Multi-Origin Workspace Disconnect**
+  - **Severity:** High (Data Loss / Confusion)
+  - **Location:** [`js/script.js#L725-L734`](file:///home/raja/Workspace/keepLocal/js/script.js#L725-L734) (`openFolderWorkspace`) & [`js/script.js#L968-L985`](file:///home/raja/Workspace/keepLocal/js/script.js#L968-L985) (`openWorkspace`)
+  - **Problem Description:** When a user opens an existing linked directory via `openFolderWorkspace()`, `findWorkspaceByHandle()` finds the matching workspace and calls `openWorkspace(matchedWs.id, false)`. However, `openWorkspace()` only loads from IndexedDB (`loadWsFiles`) and does not re-read from the physical directory handle. If IndexedDB was cleared, replaced, or accessed from a different origin (e.g. `http://raut-devel01:5500` vs `http://localhost:5500`), the notes on disk are not loaded. Additionally, if the user picks "Use Folder Notes Only", local browser notes that had not synced are completely discarded.
+  - **Impact:** Users reopen KeepLocal or connect a folder and find notes seemingly missing or disappeared.
+  - **How to Fix:** When reconnecting an existing folder handle in `openFolderWorkspace()`, re-read directory entries from disk via `readDirectoryHandle()` and reconcile with in-memory files before opening the workspace.
+
+- [ ] **AUDIT-18: Ephemeral External Image URLs Breaking Cross-Device and Offline**
+  - **Severity:** Medium (Offline & Cross-Device Image Failure)
+  - **Location:** [`js/script.js#L3388-L3396`](file:///home/raja/Workspace/keepLocal/js/script.js#L3388-L3396) (`CustomImageTool.onPaste`)
+  - **Problem Description:** When pasting an image from an external or local dev server (e.g. `<img src="http://raut-devel01:5500/...">`), `CustomImageTool` checks `if (src.startsWith("data:image/"))`, but leaves any other HTTP/HTTPS URL as an external string link. When KeepLocal is accessed from another device, or when the external host/port is unreachable or offline, the image fails with `Unable to load image: ...`.
+  - **Impact:** Pasted images become broken when viewed offline, across network boundaries, or after temporary servers shut down.
+  - **How to Fix:** In `CustomImageTool.onPaste()`, attempt to fetch and convert external image URLs (or clipboard image blob entries) into local attachments via `saveImageToAttachments()`.
+
+- [ ] **AUDIT-19: Redundant Conflict Prompt and Destructive Merge when Selecting Current Folder**
+  - **Severity:** Medium (UX Disruption & Accidental Data Corruption)
+  - **Location:** [`js/script.js#L2053-L2103`](file:///home/raja/Workspace/keepLocal/js/script.js#L2053-L2103) (`saveWorkspace`)
+  - **Problem Description:** When a user clicks "Change Folder" and selects the directory that the current workspace is already connected to, `saveWorkspace()` fails to check `await handle.isSameEntry(workspaceHandle)`. Because `localFileCount > 0 && folderFileCount > 0`, it displays the "Existing Files Detected" conflict dialog and prompts the user to merge or replace, inadvertently triggering the buggy merge flow on identical directories.
+  - **Impact:** Confusing prompt and unnecessary triggering of merge logic when re-selecting or re-authorizing the existing folder.
+  - **How to Fix:** In `saveWorkspace()`, if `workspaceHandle && await handle.isSameEntry(workspaceHandle)`, recognize that the same folder was selected, update authorization status, and perform a clean re-sync without displaying the "Existing Files Detected" conflict modal.

@@ -3,7 +3,7 @@
    Offline caching for local-first note taking (ARCH-01)
    ============================================================ */
 
-const CACHE_NAME = 'keeplocal-v7';
+const CACHE_NAME = 'keeplocal-v8';
 
 const STATIC_ASSETS = [
 	'./',
@@ -64,7 +64,7 @@ self.addEventListener('activate', (event) => {
 	);
 });
 
-// Fetch: Stale-While-Revalidate / Cache-First strategy
+// Fetch: Network-first for same-origin app files, Cache-first for immutable CDN vendor assets
 self.addEventListener('fetch', (event) => {
 	// Only handle GET requests
 	if (event.request.method !== 'GET') return;
@@ -74,10 +74,12 @@ self.addEventListener('fetch', (event) => {
 	// Bypass caching for non-http(s) or chrome-extension schemes
 	if (!url.protocol.startsWith('http')) return;
 
-	event.respondWith(
-		caches.match(event.request).then((cachedResponse) => {
-			// If found in cache, return it and optionally update in background
-			const fetchPromise = fetch(event.request)
+	const isSameOrigin = (url.origin === self.location.origin);
+
+	if (isSameOrigin) {
+		// Network-first with cache fallback for local app logic (prevents stale code traps)
+		event.respondWith(
+			fetch(event.request)
 				.then((networkResponse) => {
 					if (networkResponse && networkResponse.status === 200) {
 						const responseToCache = networkResponse.clone();
@@ -87,13 +89,26 @@ self.addEventListener('fetch', (event) => {
 					}
 					return networkResponse;
 				})
-				.catch((err) => {
-					// Network failed (offline)
-					if (cachedResponse) return cachedResponse;
-					return new Response('', { status: 408, statusText: 'Network Failed or Offline' });
-				});
+				.catch(() => caches.match(event.request))
+		);
+	} else {
+		// Cache-first for external CDN libraries
+		event.respondWith(
+			caches.match(event.request).then((cachedResponse) => {
+				const fetchPromise = fetch(event.request)
+					.then((networkResponse) => {
+						if (networkResponse && networkResponse.status === 200) {
+							const responseToCache = networkResponse.clone();
+							caches.open(CACHE_NAME).then((cache) => {
+								cache.put(event.request, responseToCache);
+							});
+						}
+						return networkResponse;
+					})
+					.catch(() => cachedResponse);
 
-			return cachedResponse || fetchPromise;
-		})
-	);
+				return cachedResponse || fetchPromise;
+			})
+		);
+	}
 });
