@@ -164,5 +164,56 @@ assert.ok(peerAText.toString().includes("<!-- Welcome -->"));
 assert.ok(peerAText.toString().includes("Added by Peer B."));
 console.log("✓ Concurrent editing convergence verified: both peers reached identical text!");
 
+// 7. Test Scope and Echo Prevention Idempotency
+const manager = global.KeepLocalCollabManager;
+manager.setScope("workspace");
+assert.strictEqual(manager.getScope(), "workspace");
+manager.setScope("note");
+assert.strictEqual(manager.getScope(), "note");
+console.log("✓ Collaboration Scope switching (note vs workspace) verified");
+
+// Test that syncStringToYText with identical text does zero mutations (preventing echo loops)
+const initialYTextStr = peerAText.toString();
+let updateTriggered = false;
+peerADoc.on("update", () => { updateTriggered = true; });
+syncStringToYText(peerAText, initialYTextStr);
+assert.strictEqual(updateTriggered, false, "Identical string must not trigger CRDT updates");
+console.log("✓ Echo prevention verified: identical text diff is strictly no-op");
+
+// 8. Test Workspace Map Sync (Diagram 1 & 2 Workspace sharing)
+const wsDocA = new Y.Doc();
+const wsDocB = new Y.Doc();
+const metaA = wsDocA.getMap("meta");
+const metaB = wsDocB.getMap("meta");
+const filesA = wsDocA.getMap("files");
+const filesB = wsDocB.getMap("files");
+
+metaA.set("scope", "workspace");
+metaA.set("workspaceName", "Project Docs");
+filesA.set("tree", JSON.stringify([{ id: "f1", name: "Architecture.md", content: "# Arch" }]));
+
+// Sync from A to B:
+const wsUpdateA = Y.encodeStateAsUpdate(wsDocA, Y.encodeStateVector(wsDocB));
+Y.applyUpdate(wsDocB, wsUpdateA);
+
+assert.strictEqual(metaB.get("scope"), "workspace");
+assert.strictEqual(metaB.get("workspaceName"), "Project Docs");
+const parsedTree = JSON.parse(filesB.get("tree"));
+assert.strictEqual(parsedTree.length, 1);
+assert.strictEqual(parsedTree[0].name, "Architecture.md");
+console.log("✓ Entire workspace map & file tree synchronization verified");
+
+// 9. Test Cross-Mode Block <-> Plain Offset Mapping
+assert.strictEqual(typeof manager._blockToPlainOffset, "function");
+assert.strictEqual(typeof manager._plainToBlockOffset, "function");
+const samplePlain = "Hello world\n\nSecond block\n\nThird block";
+// Test fallback behavior without DOM
+const plainOffset = manager._blockToPlainOffset(1, 5);
+assert.strictEqual(typeof plainOffset, "number");
+const blockOffset = manager._plainToBlockOffset(15);
+assert.strictEqual(typeof blockOffset, "object");
+assert.ok("blockIndex" in blockOffset && "charOffset" in blockOffset);
+console.log("✓ Cross-mode Block <-> Plain cursor translation verified");
+
 console.log("\nAll KeepLocal Collaboration tests passed successfully!");
 

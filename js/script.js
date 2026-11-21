@@ -23,6 +23,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 	let editorMode = (typeof localStorage !== "undefined" && localStorage.getItem("keeplocal_editor_mode")) || "block";
 	let editorInstance = null;
 	let isInitEditor = false;
+	let isLocalUserEditing = false;
+	let lastLocalUserEditTime = 0;
 	let editorLoadedFileId = null;
 	let isAddingFile = false;
 	let isOpenTabInProgress = false;
@@ -491,17 +493,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		for (const ws of filtered) {
 			const card = document.createElement("div");
-			card.className = "ws-card";
+			card.className = "ws-card" + (ws.isCollab ? " collab-shared" : "");
 			card.setAttribute("data-wsid", ws.id);
 
 			const relTime = timeAgo(ws.lastOpenedAt || ws.createdAt);
-			const folderBadge = ws.folderName
-				? `<span class="ws-card-badge folder-badge"><i data-lucide="folder" size="10"></i>${escHtml(ws.folderName)}</span>`
-				: `<span class="ws-card-badge local-badge"><i data-lucide="hard-drive" size="10"></i>Local</span>`;
+			let folderBadge = "";
+			if (ws.isCollab) {
+				folderBadge = `<span class="ws-card-badge collab-badge-tag"><i data-lucide="users" size="10"></i>Shared with Me</span>`;
+			} else if (ws.folderName) {
+				folderBadge = `<span class="ws-card-badge folder-badge"><i data-lucide="folder" size="10"></i>${escHtml(ws.folderName)}</span>`;
+			} else {
+				folderBadge = `<span class="ws-card-badge local-badge"><i data-lucide="hard-drive" size="10"></i>Local</span>`;
+			}
 
 			card.innerHTML = `
 			<div class="ws-card-icon">
-				<i data-lucide="${ws.folderName ? 'folder-open' : 'layers'}" size="22"></i>
+				<i data-lucide="${ws.isCollab ? 'users' : (ws.folderName ? 'folder-open' : 'layers')}" size="22"></i>
 			</div>
 			<div class="ws-card-body">
 				<div class="ws-card-name">${escHtml(ws.name)}</div>
@@ -4067,6 +4074,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (isInitEditor) return;
 				clearTimeout(editorSaveTimer);
 				const editingId = editorLoadedFileId || selectedId;
+				const isCollabActive = !!(window.KeepLocalCollabManager && window.KeepLocalCollabManager.isActive());
+				const debounceDelay = isCollabActive ? 80 : 400;
+
 				editorSaveTimer = setTimeout(async () => {
 					if (!editingId || (selectedId !== editingId && editorLoadedFileId !== editingId)) return;
 					const f = findNode(files, editingId);
@@ -4078,12 +4088,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 							if (editorTextarea) editorTextarea.value = f.content;
 							persistCurrent();
 							syncWorkspace(false);
-							if (window.KeepLocalCollabManager && window.KeepLocalCollabManager.isActive()) {
+							// Only push to collaboration CRDT when the edit originated from actual local user typing
+							const isLocal = isLocalUserEditing || (Date.now() - lastLocalUserEditTime < 2500);
+							if (isLocal && window.KeepLocalCollabManager && window.KeepLocalCollabManager.isActive()) {
 								window.KeepLocalCollabManager.handleLocalInput(f.content);
+								isLocalUserEditing = false;
 							}
 						} catch (_) { }
 					}
-				}, 400);
+				}, debounceDelay);
 			}
 		});
 		window.editorInstance = editorInstance;
@@ -4344,15 +4357,35 @@ document.addEventListener("DOMContentLoaded", async () => {
 		cursorPosSpan.textContent = `Ln ${lines.length}, Col ${lines[lines.length - 1].length + 1}`;
 	}
 
+	// Track active user keystrokes to prevent programmatic renders from triggering false collaboration syncs
+	document.addEventListener("keydown", (e) => {
+		const target = e.target;
+		if (target && (target.id === "editor" || target.closest?.("#editorjs") || target.closest?.(".codex-editor") || target.closest?.(".ce-block"))) {
+			isLocalUserEditing = true;
+			lastLocalUserEditTime = Date.now();
+		}
+	}, true);
+
+	document.addEventListener("input", (e) => {
+		const target = e.target;
+		if (target && (target.id === "editor" || target.closest?.("#editorjs") || target.closest?.(".codex-editor") || target.closest?.(".ce-block"))) {
+			isLocalUserEditing = true;
+			lastLocalUserEditTime = Date.now();
+		}
+	}, true);
+
 	editorTextarea.addEventListener("input", async () => {
 		const targetId = (findNode(files, selectedId)?.type === "file") ? selectedId : editorLoadedFileId;
 		const f = findNode(files, targetId);
 		if (f?.type === "file") {
+			isLocalUserEditing = true;
+			lastLocalUserEditTime = Date.now();
 			f.content = editorTextarea.value;
 			persistCurrent();
 			syncWorkspace(false);
 			if (window.KeepLocalCollabManager && window.KeepLocalCollabManager.isActive()) {
 				window.KeepLocalCollabManager.handleLocalInput(editorTextarea.value);
+				isLocalUserEditing = false;
 			}
 		}
 		updateLineNumbers();
@@ -4897,6 +4930,69 @@ document.addEventListener("DOMContentLoaded", async () => {
 			await loadFile();
 			syncWorkspace();
 			return nf;
+		},
+		getWorkspaces: () => workspaces,
+		getActiveWorkspace: () => workspaces.find(w => w.id === activeWsId) || null,
+		openWorkspace: async (id) => openWorkspace(id),
+		renderWorkspaceCards: () => renderWorkspaceCards(),
+		ensureCollabWorkspace: async (wsName, roomId) => {
+			let target = workspaces.find(w => w.collabRoomId === roomId || (w.isCollab && w.name === `Shared: ${wsName}`));
+			if (!target) {
+				target = {
+					id: uid("ws"),
+					name: wsName ? `Shared: ${wsName}` : "Shared with Me",
+					createdAt: Date.now(),
+					lastOpenedAt: Date.now(),
+					folderName: null,
+					fileCount: 0,
+					isCollab: true,
+					collabRoomId: roomId
+				};
+				workspaces.push(target);
+				saveWorkspaceMeta();
+				renderWorkspaceCards();
+			}
+			await openWorkspace(target.id);
+			welcomeScreen.classList.add("hidden");
+			appShell.classList.remove("hidden");
+			return target;
+		},
+		setFileTree: async (newFiles) => {
+			if (!Array.isArray(newFiles)) return;
+			files = newFiles;
+			if (activeWsId) {
+				const ws = workspaces.find(w => w.id === activeWsId);
+				if (ws) {
+					ws.fileCount = countAllFiles(files);
+					saveWorkspaceMeta();
+				}
+				saveWsFiles(activeWsId);
+			}
+			render();
+		},
+		getEditorContainer: () => document.querySelector(".editor-container"),
+		getCursorOverlay: () => document.getElementById("collabCursorOverlay"),
+		isLocalEditing: () => isLocalUserEditing,
+		setLocalEditing: (v) => { isLocalUserEditing = !!v; }
+	};
+
+	window.switchCollabScope = function (scope) {
+		const cardNote = document.getElementById("collabScopeCardNote");
+		const cardWs = document.getElementById("collabScopeCardWorkspace");
+		const radioNote = document.getElementById("collabScopeNote");
+		const radioWs = document.getElementById("collabScopeWorkspace");
+
+		if (scope === "workspace") {
+			if (cardNote) cardNote.classList.remove("active");
+			if (cardWs) cardWs.classList.add("active");
+			if (radioWs) radioWs.checked = true;
+		} else {
+			if (cardNote) cardNote.classList.add("active");
+			if (cardWs) cardWs.classList.remove("active");
+			if (radioNote) radioNote.checked = true;
+		}
+		if (window.KeepLocalCollabManager) {
+			window.KeepLocalCollabManager.setScope(scope);
 		}
 	};
 

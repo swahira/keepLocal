@@ -3253,3 +3253,189 @@ button {
 .collab-insecure-btn:hover {
 	opacity: 0.9;
 }
+
+/* Collaboration Scope Selector Cards */
+.collab-scope-cards {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 10px;
+	margin-top: 4px;
+}
+
+.collab-scope-card {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 10px 12px;
+	border-radius: var(--radius);
+	border: 1px solid var(--border-color);
+	background: var(--bg-secondary);
+	cursor: pointer;
+	transition: border-color var(--transition), background var(--transition), transform var(--transition);
+	position: relative;
+}
+
+.collab-scope-card input[type="radio"] {
+	position: absolute;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.collab-scope-card:hover {
+	border-color: var(--accent-color);
+	background: var(--hover-bg);
+}
+
+.collab-scope-card.active {
+	border-color: var(--accent-color);
+	background: rgba(16, 185, 129, 0.08);
+	box-shadow: 0 0 0 1px var(--accent-color);
+}
+
+.collab-scope-card-icon {
+	color: var(--accent-color);
+	flex-shrink: 0;
+	margin-top: 2px;
+}
+
+.collab-scope-card-content {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.collab-scope-card-content strong {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-primary);
+}
+
+.collab-scope-card-content small {
+	font-size: 11px;
+	color: var(--text-muted);
+	line-height: 1.3;
+}
+
+/* ============================================================
+   LIVE COLLABORATOR CURSORS & HIGHLIGHTS
+   ============================================================ */
+
+.editor-container {
+	position: relative;
+}
+
+.collab-cursor-overlay {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	overflow: hidden;
+	z-index: 80;
+}
+
+.collab-remote-cursor {
+	position: absolute;
+	width: 2px;
+	background: var(--peer-color, #10B981);
+	pointer-events: none;
+	z-index: 100;
+	border-radius: 1px;
+	transition: left 0.08s ease-out, top 0.08s ease-out;
+}
+
+.collab-remote-flag {
+	position: absolute;
+	bottom: 100%;
+	left: -2px;
+	transform: translateY(-4px);
+	padding: 2px 7px 2px 5px;
+	font-size: 11px;
+	font-weight: 600;
+	color: #ffffff;
+	background: var(--peer-color, #10B981);
+	border-radius: 4px;
+	white-space: nowrap;
+	pointer-events: none;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	user-select: none;
+	line-height: 1.3;
+}
+
+.collab-remote-flag::after {
+	content: "";
+	position: absolute;
+	top: 100%;
+	left: 2px;
+	border-width: 4px 4px 0 0;
+	border-style: solid;
+	border-color: var(--peer-color, #10B981) transparent transparent transparent;
+}
+
+.collab-remote-cursor.flag-down .collab-remote-flag {
+	bottom: auto;
+	top: 100%;
+	transform: translateY(4px);
+}
+
+.collab-remote-cursor.flag-down .collab-remote-flag::after {
+	top: auto;
+	bottom: 100%;
+	border-width: 0 4px 4px 0;
+	border-color: transparent transparent var(--peer-color, #10B981) transparent;
+}
+
+.collab-remote-avatar {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	background: rgba(255, 255, 255, 0.32);
+	font-size: 9px;
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+.collab-remote-selection {
+	position: absolute;
+	background: var(--peer-color-translucent, rgba(16, 185, 129, 0.28));
+	pointer-events: none;
+	z-index: 90;
+	border-radius: 2px;
+}
+
+/* Active Collaborator Block Presence (Editor.js) */
+.ce-block.collab-peer-active {
+	position: relative;
+}
+
+.ce-block.collab-peer-active::before {
+	content: "";
+	position: absolute;
+	left: -8px;
+	top: 2px;
+	bottom: 2px;
+	width: 3px;
+	background: var(--peer-color, var(--accent-color));
+	border-radius: 2px;
+	transition: background var(--transition);
+}
+
+/* Workspace Card Shared Badge */
+.ws-card-badge.collab-badge-tag {
+	background: rgba(16, 185, 129, 0.12);
+	color: var(--accent-color);
+	border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.ws-card.collab-shared {
+	border-color: rgba(16, 185, 129, 0.35);
+}
+
+.ws-card.collab-shared:hover {
+	border-color: var(--accent-color);
+	box-shadow: 0 4px 16px rgba(16, 185, 129, 0.12);
+}
